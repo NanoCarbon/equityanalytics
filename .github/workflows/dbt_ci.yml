@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'dbt_project/**'
+      - 'dbt_project.yml'
 
 jobs:
   dbt-test:
@@ -46,7 +47,6 @@ jobs:
           echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
 
       - name: Run dbt build
-        working-directory: .
         run: |
-          dbt deps --project-dir dbt_project --profiles-dir ~/.dbt
-          dbt build --project-dir dbt_project --profiles-dir ~/.dbt --target ci
+          dbt deps --profiles-dir ~/.dbt
+          dbt build --profiles-dir ~/.dbt --target ci
