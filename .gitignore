@@ -26,3 +26,7 @@ dbt_packages/
 logs/
 # end dbt Cloud content
 dbt_internal_packages/
+
+
+snowflake_private_key.pem
+snowflake_public_key.pem
