@@ -1,3 +1,4 @@
+-- testing CI workflow
 with source as (
     select * from {{ source('raw', 'company_info') }}
 ),
