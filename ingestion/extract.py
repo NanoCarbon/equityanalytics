@@ -24,7 +24,7 @@ def extract_prices(tickers: List[str], lookback_days: int = 365) -> pd.DataFrame
     )
 
     # Normalize MultiIndex columns → long format
-    df = raw.stack(level=1).reset_index()
+    df = raw.stack(level=1, future_stack=True).reset_index()
     df.columns = ["date", "ticker", "close", "high", "low", "open", "volume"]
     df["extracted_at"] = datetime.utcnow()
 

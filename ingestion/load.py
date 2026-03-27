@@ -5,14 +5,14 @@ import os
 
 
 def get_connection():
-    """Create a Snowflake connection using environment variables."""
     return snowflake.connector.connect(
         user=os.environ["SNOWFLAKE_USER"],
-        password=os.environ["SNOWFLAKE_PASSWORD"],
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         warehouse="TRANSFORM_WH",
         database="EQUITY_ANALYTICS",
-        schema="RAW"
+        schema="RAW",
+        authenticator="programmatic_access_token",
+        token=os.environ["SNOWFLAKE_TOKEN"]
     )
 
 
