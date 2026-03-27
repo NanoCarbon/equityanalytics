@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: fact_daily_prices
+    description: "Daily price and return metrics per security. Grain: ticker + price_date."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: price_date
+        tests:
+          - not_null
+      - name: close_price
+        tests:
+          - not_null
+      - name: daily_return
+        tests:
+          - not_null
+
+  - name: dim_security
+    description: "One row per unique security with company metadata."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - unique
+
+  - name: dim_date
+    description: "Calendar dimension spanning 2020 to present."
+    columns:
+      - name: date_key
+        tests:
+          - not_null
+          - unique

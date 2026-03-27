@@ -4,10 +4,6 @@ sources:
   - name: raw
     database: EQUITY_ANALYTICS
     schema: RAW
-    loaded_at_field: EXTRACTED_AT
-    freshness:
-      warn_after: {count: 1, period: day}
-      error_after: {count: 3, period: day}
     tables:
       - name: prices
         description: "Raw daily OHLCV price data from yfinance"
