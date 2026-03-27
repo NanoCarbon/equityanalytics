@@ -15,3 +15,4 @@ renamed as (
 )
 
 select * from renamed
+-- ci test

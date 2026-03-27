@@ -2,7 +2,7 @@ name: 'equity_analytics'
 version: '1.0.0'
 config-version: 2
 
-profile: 'default'
+profile: 'equity_analytics'
 
 model-paths: ["dbt_project/models"]
 analysis-paths: ["analyses"]
