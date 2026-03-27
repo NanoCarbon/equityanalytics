@@ -1,0 +1,6 @@
+prefect
+yfinance
+pandas
+snowflake-connector-python
+"snowflake-connector-python[pandas]"
+anthropic
