@@ -18,3 +18,6 @@ dbt_project/.user.yml
 # OS
 .DS_Store
 Thumbs.db
+
+snowflake_private_key.pem
+snowflake_public_key.pem
