@@ -1,4 +1,3 @@
-Set-Content dbt_project\models\staging\stg_prices.sql
 with source as (
     select * from {{ source('raw', 'prices') }}
 ),
