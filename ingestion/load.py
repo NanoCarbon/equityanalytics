@@ -36,7 +36,22 @@ def get_max_date(table_name: str) -> date | None:
     finally:
         conn.close()
 
-
+def get_min_date(table_name: str):
+    """Returns the earliest date already loaded — used to know where backfill should stop."""
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT MIN(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
+            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+        """)
+        result = cursor.fetchone()[0]
+        return result
+    except Exception:
+        return None
+    finally:
+        conn.close()
+        
 def load_dataframe(df: pd.DataFrame, table_name: str, overwrite: bool = False) -> int:
     """
     Bulk load a DataFrame into Snowflake RAW schema.

@@ -1,4 +1,5 @@
 from prefect import flow, task, get_run_logger
+from datetime import datetime
 import pandas as pd
 
 
@@ -43,7 +44,7 @@ def task_extract_prices(
     name="extract-company-info",
     retries=2,
     retry_delay_seconds=60,
-    timeout_seconds=3600  # 1 hour max — 600 tickers × 2s = ~20 min
+    timeout_seconds=3600
 )
 def task_extract_company_info(tickers: list) -> pd.DataFrame:
     logger = get_run_logger()
@@ -118,6 +119,85 @@ def equity_pipeline(lookback_days: int = 365):
 def macro_pipeline(lookback_days: int = 365):
     macro_df = task_extract_fred(lookback_days)
     task_load_macro(macro_df)
+
+
+@flow(name="backfill-pipeline", log_prints=True)
+def backfill_pipeline(
+    start_date: str = "2010-01-01",
+    batch_size: int = 50,
+    batch_delay_seconds: int = 30
+):
+    """
+    One-time historical backfill flow.
+    Safe to re-run — only appends rows not already present.
+    """
+    import time
+    from ingestion.extract import get_all_tickers, extract_prices
+    from ingestion.load import load_dataframe, get_min_date
+
+    logger = get_run_logger()
+
+    tickers = get_all_tickers()
+    logger.info(f"Backfilling {len(tickers)} tickers from {start_date}")
+
+    existing_min = get_min_date("PRICES")
+    if existing_min:
+        end_date = str(existing_min)
+        logger.info(f"Existing data starts at {end_date} — backfilling before that")
+    else:
+        end_date = datetime.today().strftime("%Y-%m-%d")
+        logger.info("No existing data — full load")
+
+    if existing_min and str(existing_min) <= start_date:
+        logger.info(f"Data already starts at or before {start_date} — nothing to backfill")
+        return
+
+    batches = [tickers[i:i + batch_size] for i in range(0, len(tickers), batch_size)]
+    logger.info(f"Processing {len(batches)} batches of up to {batch_size} tickers")
+
+    total_rows = 0
+    failed_batches = []
+
+    for i, batch in enumerate(batches, 1):
+        logger.info(f"Batch {i}/{len(batches)}: {batch[0]} → {batch[-1]}")
+
+        try:
+            df = extract_prices(
+                tickers=batch,
+                start_date_str=start_date,
+                end_date_str=end_date
+            )
+
+            if df.empty:
+                logger.info(f"Batch {i}: no data returned — skipping")
+            else:
+                rows = load_dataframe(df, "PRICES", overwrite=False)
+                total_rows += rows
+                logger.info(f"Batch {i}: loaded {rows} rows — running total: {total_rows}")
+
+        except Exception as e:
+            logger.error(f"Batch {i} failed: {e}")
+            failed_batches.append({
+                "batch_num": i,
+                "tickers": batch,
+                "error": str(e)
+            })
+            logger.info(f"Continuing to batch {i + 1}...")
+
+        if i < len(batches):
+            logger.info(f"Sleeping {batch_delay_seconds}s...")
+            time.sleep(batch_delay_seconds)
+
+    logger.info(f"Backfill complete — {total_rows} total rows loaded")
+
+    if failed_batches:
+        logger.warning(f"{len(failed_batches)} batches failed:")
+        for fb in failed_batches:
+            logger.warning(f"  Batch {fb['batch_num']}: {fb['error']}")
+        logger.warning("Re-run backfill_pipeline to retry — successful batches won't duplicate")
+    else:
+        logger.info("All batches completed successfully")
+        logger.info("Next: dbt build --select fact_daily_prices --full-refresh")
 
 
 if __name__ == "__main__":

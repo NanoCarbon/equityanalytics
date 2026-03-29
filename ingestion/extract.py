@@ -78,43 +78,58 @@ def get_all_tickers() -> List[str]:
 def extract_prices(
     tickers: List[str],
     start_date: date | None = None,
-    lookback_days: int = 365
+    lookback_days: int = 365,
+    start_date_str: str | None = None,
+    end_date_str: str | None = None
 ) -> pd.DataFrame:
     """
     Bulk extract OHLCV price data from yfinance.
-    yfinance batches multiple tickers in one request — no per-ticker delay needed.
+    
+    Three modes:
+    - start_date_str + end_date_str: explicit range (for backfill)
+    - start_date: incremental from this date to today
+    - lookback_days: rolling window from today
     """
-    end_date = datetime.today()
-
-    if start_date is not None:
-        effective_start = datetime.combine(
-            start_date, datetime.min.time()
-        ) + timedelta(days=1)
+    if start_date_str and end_date_str:
+        effective_start = start_date_str
+        effective_end = end_date_str
+    elif start_date is not None:
+        effective_start = (
+            datetime.combine(start_date, datetime.min.time()) + timedelta(days=1)
+        ).strftime("%Y-%m-%d")
+        effective_end = datetime.today().strftime("%Y-%m-%d")
     else:
-        effective_start = end_date - timedelta(days=lookback_days)
+        effective_start = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        effective_end = datetime.today().strftime("%Y-%m-%d")
 
     print(f"Extracting prices for {len(tickers)} tickers "
-          f"from {effective_start.date()} to {end_date.date()}")
+          f"from {effective_start} to {effective_end}")
 
-    # yfinance bulk download — all tickers in one request
-    raw = yf.download(
-        tickers=tickers,
-        start=effective_start.strftime("%Y-%m-%d"),
-        end=end_date.strftime("%Y-%m-%d"),
-        auto_adjust=True,
-        progress=False,
-        group_by='ticker'
-    )
-
-    if raw.empty:
-        print("No new price data to extract")
+    try:
+        raw = yf.download(
+            tickers=tickers,
+            start=effective_start,
+            end=effective_end,
+            auto_adjust=True,
+            progress=False,
+            group_by='ticker'
+        )
+    except Exception as e:
+        print(f"yfinance download failed: {e}")
         return pd.DataFrame()
 
-    # Normalize to long format
-    df = raw.stack(level=0, future_stack=True).reset_index()
-    df.columns = ["date", "ticker", "close", "high", "low", "open", "volume"]
-    df = df.dropna(subset=["close"])
-    df["extracted_at"] = datetime.utcnow()
+    if raw.empty:
+        print("No price data returned")
+        return pd.DataFrame()
+
+    try:
+        df = raw.stack(level=0, future_stack=True).reset_index()
+        df.columns = ["date", "ticker", "close", "high", "low", "open", "volume"]
+        df = df.dropna(subset=["close"])
+        df["extracted_at"] = datetime.utcnow()
+    except Exception as e:
+        print(f"Error normalizing price data: {e}")
+        return pd.DataFrame()
 
     print(f"Extracted {len(df)} price rows")
     return df
