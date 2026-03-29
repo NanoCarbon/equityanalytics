@@ -1,5 +1,8 @@
 import os
 import json
+import logging
+import hashlib
+import time
 import streamlit as st
 import plotly.express as px
 import pandas as pd
@@ -8,6 +11,15 @@ from anthropic import Anthropic
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 client = Anthropic()
 
@@ -149,104 +161,191 @@ Rules:
 - Order results by PRICE_DATE ASC for time series charts
 """
 
+# ── Snowflake connection (cached for the session) ─────────────────────────────
+
+@st.cache_resource
 def get_snowflake_connection():
-    return snowflake.connector.connect(
+    """
+    Create and cache a single Snowflake connection for the Streamlit session.
+    st.cache_resource keeps this alive across reruns without reconnecting.
+    """
+    logger.info("Opening Snowflake connection")
+    conn = snowflake.connector.connect(
         user=os.environ["SNOWFLAKE_USER"],
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         warehouse="TRANSFORM_WH",
         database="EQUITY_ANALYTICS",
         schema="MARTS",
         authenticator="programmatic_access_token",
-        token=os.environ["SNOWFLAKE_TOKEN"]
+        token=os.environ["SNOWFLAKE_TOKEN"],
+        network_timeout=30,      # fail fast if network is unreachable
+        login_timeout=15,
     )
+    logger.info("Snowflake connection established")
+    return conn
+
 
 def execute_sql(sql: str) -> pd.DataFrame:
+    """
+    Execute SQL against Snowflake with a statement-level timeout.
+    Reconnects automatically if the cached connection has gone stale.
+    """
     conn = get_snowflake_connection()
+
+    # Snowflake statement timeout (seconds) — prevents runaway queries
+    QUERY_TIMEOUT_SECONDS = 30
+
+    start = time.monotonic()
     try:
-        df = pd.read_sql(sql, conn)
+        cursor = conn.cursor()
+        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {QUERY_TIMEOUT_SECONDS}")
+        cursor.execute(sql)
+        df = cursor.fetch_pandas_all()
         df.columns = [c.lower() for c in df.columns]
+        elapsed = time.monotonic() - start
+        logger.info("Query completed in %.2fs, returned %d rows", elapsed, len(df))
         return df
-    finally:
-        conn.close()
+    except snowflake.connector.errors.ProgrammingError as e:
+        logger.error("Snowflake query error: %s | SQL: %.200s", e, sql)
+        raise
+    except Exception as e:
+        logger.error("Unexpected error during query: %s", e)
+        # Clear the cached connection so the next call gets a fresh one
+        get_snowflake_connection.clear()
+        raise
+
+
+# ── Query result cache ────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=300, show_spinner=False)
+def execute_sql_cached(sql: str) -> pd.DataFrame:
+    """
+    Thin cache wrapper around execute_sql.
+    Identical SQL strings return the cached DataFrame for up to 5 minutes,
+    avoiding redundant round-trips for repeated prompts.
+    """
+    return execute_sql(sql)
+
+
+# ── LLM calls ─────────────────────────────────────────────────────────────────
 
 def generate_sql(messages: list) -> str:
+    start = time.monotonic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
         system=SYSTEM_PROMPT,
-        messages=messages
+        messages=messages,
+        timeout=30,  # seconds — prevents indefinite hang
     )
-    return response.content[0].text.strip()
+    elapsed = time.monotonic() - start
+    sql = response.content[0].text.strip()
+    logger.info("SQL generation completed in %.2fs", elapsed)
+    logger.debug("Generated SQL: %.300s", sql)
+    return sql
+
+
+def _parse_chart_config(raw: str) -> dict:
+    """
+    Parse Claude's chart configuration response to a dict.
+
+    Handles three cases in order:
+      1. Raw JSON (ideal)
+      2. JSON wrapped in markdown code fences
+      3. Partial/malformed JSON — falls back to a safe line-chart default
+    """
+    text = raw.strip()
+
+    # Strip markdown fences if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Drop opening fence (and optional language tag) and closing fence
+        inner = [l for l in lines[1:] if l.strip() != "```"]
+        text = "\n".join(inner).strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("Could not parse chart config JSON, using fallback. Raw: %.200s", raw)
+        return {
+            "chart_type": "line",
+            "x": None,       # resolved below in generate_chart
+            "y": None,
+            "color": None,
+            "title": "Chart"
+        }
+
 
 def generate_chart(df: pd.DataFrame, user_prompt: str):
-    """Ask Claude how to visualize the data."""
+    """Ask Claude how to visualize the data, then build the Plotly figure."""
     col_info = {col: str(df[col].dtype) for col in df.columns}
-    
+
+    start = time.monotonic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=300,
-        system="""You are a data visualization expert. Given a DataFrame and a user request, 
+        system="""You are a data visualization expert. Given a DataFrame and a user request,
         return ONLY a valid JSON object with no explanation, no markdown, no backticks.
         The JSON must have these exact keys:
         - chart_type: one of 'line', 'bar', 'scatter'
         - x: column name for x axis
-        - y: column name for y axis  
+        - y: column name for y axis
         - color: column name for color grouping (or null if single series)
         - title: a short descriptive chart title
         Use only column names that exist in the provided columns list.
         Return raw JSON only. Example: {"chart_type": "line", "x": "price_date", "y": "cumulative_return", "color": "ticker", "title": "Cumulative Returns"}""",
         messages=[{
             "role": "user",
-            "content": f"User request: {user_prompt}\nAvailable columns: {list(df.columns)}\nSample data: {df.head(2).to_dict()}"
-        }]
+            "content": (
+                f"User request: {user_prompt}\n"
+                f"Available columns: {list(df.columns)}\n"
+                f"Sample data: {df.head(2).to_dict()}"
+            )
+        }],
+        timeout=15,
     )
-    
-    raw = response.content[0].text.strip()
-    
-    # Strip markdown if Claude wrapped it anyway
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    raw = raw.strip()
-    
-    config = json.loads(raw)
-    
-    if config["chart_type"] == "line":
-        fig = px.line(
-            df,
-            x=config["x"],
-            y=config["y"],
-            color=config.get("color"),
-            title=config.get("title", ""),
-            template="plotly_white"
-        )
-    elif config["chart_type"] == "bar":
-        fig = px.bar(
-            df,
-            x=config["x"],
-            y=config["y"],
-            color=config.get("color"),
-            title=config.get("title", ""),
-            template="plotly_white"
-        )
-    else:
-        fig = px.scatter(
-            df,
-            x=config["x"],
-            y=config["y"],
-            color=config.get("color"),
-            title=config.get("title", ""),
-            template="plotly_white"
-        )
-    
+    elapsed = time.monotonic() - start
+    logger.info("Chart config generation completed in %.2fs", elapsed)
+
+    config = _parse_chart_config(response.content[0].text)
+
+    # Resolve None axes — fall back to first suitable columns
+    cols = list(df.columns)
+    if not config.get("x") or config["x"] not in df.columns:
+        config["x"] = cols[0]
+        logger.warning("x axis not resolved; falling back to '%s'", config["x"])
+    if not config.get("y") or config["y"] not in df.columns:
+        # Pick first numeric column that isn't x
+        numeric_cols = df.select_dtypes("number").columns.tolist()
+        config["y"] = next((c for c in numeric_cols if c != config["x"]), cols[-1])
+        logger.warning("y axis not resolved; falling back to '%s'", config["y"])
+    if config.get("color") and config["color"] not in df.columns:
+        config["color"] = None
+
+    chart_builders = {
+        "line": px.line,
+        "bar": px.bar,
+        "scatter": px.scatter,
+    }
+    build = chart_builders.get(config["chart_type"], px.line)
+
+    fig = build(
+        df,
+        x=config["x"],
+        y=config["y"],
+        color=config.get("color"),
+        title=config.get("title", ""),
+        template="plotly_white"
+    )
+
     fig.update_layout(
         xaxis_title=config["x"].replace("_", " ").title(),
         yaxis_title=config["y"].replace("_", " ").title(),
         legend_title="Ticker" if config.get("color") == "ticker" else ""
     )
-    
+
     return fig
+
 
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
 
@@ -261,7 +360,6 @@ st.title("📈 Equity Analytics Assistant")
 tab1, tab2 = st.tabs(["Chat", "Event Study"])
 
 with tab1:
-    # Sidebar with example prompts
     with st.sidebar:
         st.header("Example prompts")
         examples = [
@@ -273,19 +371,24 @@ with tab1:
             "Show me tickers trading closest to their 52-week high",
             "How did SPY perform during periods when the yield curve was inverted?",
             "Compare SPY daily returns against the Fed funds rate over the last year",
-            "Show me the Fed funds rate trend over the last year"
+            "Show me the Fed funds rate trend over the last year",
+            "Show me AAPL's revenue and net income trend over the last 4 years",
+            "Which S&P 500 stocks have the lowest trailing PE ratio?",
+            "Compare operating margins for AAPL, MSFT, GOOGL and META",
+            "Show me the top 10 stocks by free cash flow yield",
+            "How has JPM's return on equity changed over time?",
+            "Compare debt-to-equity ratios across bank stocks",
+            "Which stocks have the highest revenue growth?",
         ]
         for example in examples:
             if st.button(example, use_container_width=True):
                 st.session_state.pending_prompt = example
 
-    # Initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "pending_prompt" not in st.session_state:
         st.session_state.pending_prompt = None
 
-    # Display chat history
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             if msg["role"] == "assistant":
@@ -299,67 +402,63 @@ with tab1:
             else:
                 st.write(msg["content"])
 
-    # Handle input
     prompt = st.chat_input("Ask a question or request a chart...")
 
-    # Use sidebar button prompt if set
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
 
     if prompt:
-        # Display user message
         with st.chat_message("user"):
             st.write(prompt)
         st.session_state.messages.append({"role": "user", "content": prompt})
+        logger.info("User prompt: %.200s", prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Generating SQL..."):
-                # Build message history for Claude (text only)
-                claude_messages = [
-                    {"role": m["role"], "content": m["content"]}
-                    for m in st.session_state.messages
-                    if m["role"] == "user"
-                ]
-                
-                try:
-                    # Generate SQL
+            sql = None
+            try:
+                with st.spinner("Generating SQL..."):
+                    claude_messages = [
+                        {"role": m["role"], "content": m["content"]}
+                        for m in st.session_state.messages
+                        if m["role"] == "user"
+                    ]
                     sql = generate_sql(claude_messages)
-                    
-                    # Execute against Snowflake
-                    with st.spinner("Querying Snowflake..."):
-                        df = execute_sql(sql)
-                    
-                    if df.empty:
-                        st.write("The query returned no results. Try rephrasing your request.")
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": "No results returned.",
-                            "text": "The query returned no results. Try rephrasing your request.",
-                            "sql": sql
-                        })
-                    else:
-                        # Generate chart
-                        with st.spinner("Building chart..."):
-                            fig = generate_chart(df, prompt)
-                        
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        with st.expander("Generated SQL"):
-                            st.code(sql, language="sql")
-                        
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": prompt,
-                            "chart": fig,
-                            "sql": sql
-                        })
-                        
-                except Exception as e:
-                    error_msg = f"Something went wrong: {str(e)}"
-                    st.error(error_msg)
+
+                with st.spinner("Querying Snowflake..."):
+                    df = execute_sql_cached(sql)
+
+                if df.empty:
+                    st.write("The query returned no results. Try rephrasing your request.")
+                    logger.info("Query returned empty result set")
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": "No results returned.",
+                        "text": "The query returned no results. Try rephrasing your request.",
+                        "sql": sql
+                    })
+                else:
+                    with st.spinner("Building chart..."):
+                        fig = generate_chart(df, prompt)
+
+                    st.plotly_chart(fig, use_container_width=True)
+
                     with st.expander("Generated SQL"):
-                        st.code(sql if 'sql' in locals() else "SQL not generated", language="sql")
+                        st.code(sql, language="sql")
+
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": prompt,
+                        "chart": fig,
+                        "sql": sql
+                    })
+
+            except Exception as e:
+                logger.error("Error handling prompt '%s': %s", prompt[:100], e)
+                st.error(f"Something went wrong: {str(e)}")
+                with st.expander("Generated SQL"):
+                    st.code(sql if sql else "SQL not generated", language="sql")
+
 with tab2:
     st.header("Event Study")
     st.caption("Find all historical occurrences of an event and measure forward returns")
@@ -367,7 +466,7 @@ with tab2:
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        ticker = st.text_input("Ticker", value="SPY").upper()
+        ticker = st.text_input("Ticker", value="SPY").upper().strip()
 
     with col2:
         condition = st.selectbox(
@@ -393,18 +492,28 @@ with tab2:
     run_study = st.button("Run Event Study", type="primary")
 
     if run_study:
-        # Build the WHERE clause based on condition
+        # Validate ticker — alphanumeric + hyphen only (e.g. BRK-B)
+        import re
+        if not re.match(r'^[A-Z0-9\-]{1,10}$', ticker):
+            st.error("Invalid ticker. Use letters, numbers, and hyphens only (e.g. AAPL, BRK-B).")
+            st.stop()
+
+        # threshold comes from st.number_input — already a float, no injection risk
+        # condition comes from st.selectbox — fixed set of strings
+        threshold_decimal = threshold / 100
+
         if condition == "Daily return ≥ X%":
-            where_clause = f"daily_return >= {threshold / 100}"
+            where_clause = f"daily_return >= {threshold_decimal}"
         elif condition == "Daily return ≤ -X%":
-            where_clause = f"daily_return <= -{threshold / 100}"
+            where_clause = f"daily_return <= -{threshold_decimal}"
         elif condition == "Price within X% of 52-week high":
-            where_clause = f"pct_of_52w_high >= {1 - threshold / 100}"
+            where_clause = f"pct_of_52w_high >= {1 - threshold_decimal}"
         elif condition == "Price within X% of 52-week low":
-            where_clause = f"close_price <= week_52_low * {1 + threshold / 100}"
+            where_clause = f"close_price <= week_52_low * {1 + threshold_decimal}"
         else:
             where_clause = f"volume >= {threshold}"
 
+        # ticker is validated above; safe to interpolate
         event_sql = f"""
         WITH events AS (
             SELECT
@@ -448,18 +557,18 @@ with tab2:
         ORDER BY event_date DESC
         """
 
+        logger.info("Event study: ticker=%s condition=%s threshold=%s", ticker, condition, threshold)
+
         with st.spinner(f"Finding all {condition} events for {ticker}..."):
             try:
-                df = execute_sql(event_sql)
+                df = execute_sql_cached(event_sql)
 
                 if df.empty:
                     st.warning(f"No events found for {ticker} with condition: {condition} {threshold}%")
                 else:
-                    # Forward return columns
                     fwd_cols = ['d1', 'd2', 'd3', 'd5', 'd10', 'd21', 'd42', 'd63']
                     labels = ['1D', '2D', '3D', '5D', '10D', '21D', '42D', '63D']
 
-                    # Summary stats
                     st.subheader(f"Summary — {len(df)} events found")
 
                     summary_data = {
@@ -473,7 +582,6 @@ with tab2:
                     summary_df = pd.DataFrame(summary_data)
                     st.dataframe(summary_df, hide_index=True, use_container_width=True)
 
-                    # Fan chart
                     st.subheader("Return distribution over time")
                     import plotly.graph_objects as go
 
@@ -524,7 +632,6 @@ with tab2:
 
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Instance table
                     with st.expander(f"All {len(df)} event instances"):
                         display_df = df.copy()
                         for c in fwd_cols:
@@ -536,4 +643,5 @@ with tab2:
                         st.code(event_sql, language="sql")
 
             except Exception as e:
+                logger.error("Event study error: ticker=%s error=%s", ticker, e)
                 st.error(f"Error running event study: {str(e)}")

@@ -67,7 +67,10 @@ jobs:
           dbt build --profiles-dir ~/.dbt
 
       - name: Cleanup CI schema
+        # continue-on-error prevents a cleanup failure from blocking the PR.
+        # The CI schema will be cleaned up on the next successful run or manually.
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         run: |
           pip install snowflake-connector-python cryptography --quiet
           python << 'PYEOF'
