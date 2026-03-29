@@ -69,17 +69,27 @@ jobs:
       - name: Cleanup CI schema
         if: github.event_name == 'pull_request'
         run: |
-          python -c "
-          import snowflake.connector, os
+          pip install snowflake-connector-python --quiet
+          python << 'EOF'
+          import snowflake.connector
+          from cryptography.hazmat.primitives.serialization import load_pem_private_key
+          
+          with open('/tmp/snowflake_key.p8', 'rb') as f:
+              private_key = load_pem_private_key(f.read(), password=None)
+          
+          private_key_bytes = private_key.private_bytes(
+              encoding=__import__('cryptography.hazmat.primitives.serialization', fromlist=['Encoding']).Encoding.DER,
+              format=__import__('cryptography.hazmat.primitives.serialization', fromlist=['PrivateFormat']).PrivateFormat.PKCS8,
+              encryption_algorithm=__import__('cryptography.hazmat.primitives.serialization', fromlist=['NoEncryption']).NoEncryption()
+          )
+          
           conn = snowflake.connector.connect(
-              user=os.environ['SNOWFLAKE_USER'],
-              account=os.environ['SNOWFLAKE_ACCOUNT'],
-              private_key_path='/tmp/snowflake_key.p8',
+              user='${{ secrets.SNOWFLAKE_USER }}',
+              account='${{ secrets.SNOWFLAKE_ACCOUNT }}',
+              private_key=private_key_bytes,
               role='ACCOUNTADMIN'
           )
           conn.cursor().execute('DROP SCHEMA IF EXISTS EQUITY_ANALYTICS.CI_${{ github.event.pull_request.number }}')
           conn.close()
-          "
-        env:
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          print('Dropped CI_${{ github.event.pull_request.number }}')
+          EOF
