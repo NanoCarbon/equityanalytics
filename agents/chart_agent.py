@@ -252,83 +252,154 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
 
-html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+/*
+  Palette — warm parchment
+  --bg:          #faf7f2   page background, linen
+  --bg-card:     #fdf9f4   card surfaces, slightly lighter
+  --bg-inset:    #f3ede4   inset/stack items, warm taupe
+  --border:      #e8ddd0   borders, warm not cold
+  --border-soft: #efe8de   softer dividers
+  --ink:         #2c2416   near-black with warm undertone
+  --ink-mid:     #6b5e4e   mid-tone text
+  --ink-muted:   #a0917f   muted labels
+  --accent:      #1d4ed8   blue, unchanged — provides contrast on warm bg
+*/
+
+html, body, [class*="css"] {
+    font-family: 'DM Sans', sans-serif;
+    background-color: #faf7f2;
+}
+
+/* Streamlit's outermost app container */
+.stApp { background-color: #faf7f2; }
 
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1200px; }
 
 /* Tabs */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 0; border-bottom: 1px solid #e2e8f0; background: transparent; margin-bottom: 1.5rem;
+    gap: 0; border-bottom: 1px solid #e8ddd0; background: transparent; margin-bottom: 1.5rem;
 }
 .stTabs [data-baseweb="tab"] {
     font-family: 'DM Mono', monospace; font-size: 0.72rem; font-weight: 500;
     letter-spacing: 0.1em; text-transform: uppercase; padding: 0.75rem 1.75rem;
-    color: #94a3b8; border-bottom: 2px solid transparent; background: transparent;
+    color: #a0917f; border-bottom: 2px solid transparent; background: transparent;
 }
 .stTabs [aria-selected="true"] {
-    color: #0f172a !important; border-bottom: 2px solid #0f172a !important; background: transparent !important;
+    color: #2c2416 !important; border-bottom: 2px solid #2c2416 !important; background: transparent !important;
 }
 
 /* Hero */
-.hero { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid #f1f5f9; margin-bottom: 2rem; }
+.hero { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid #efe8de; margin-bottom: 2rem; }
 .hero-eyebrow {
     font-family: 'DM Mono', monospace; font-size: 0.68rem; font-weight: 500;
-    letter-spacing: 0.18em; text-transform: uppercase; color: #2563eb; margin-bottom: 0.75rem;
+    letter-spacing: 0.18em; text-transform: uppercase; color: #1d4ed8; margin-bottom: 0.75rem;
 }
 .hero-title {
-    font-size: 2.75rem; font-weight: 600; color: #0f172a;
+    font-size: 2.75rem; font-weight: 600; color: #2c2416;
     letter-spacing: -0.025em; line-height: 1.08; margin-bottom: 1rem;
 }
 .hero-sub {
-    font-size: 0.95rem; color: #64748b; font-weight: 300;
+    font-size: 0.95rem; color: #6b5e4e; font-weight: 300;
     max-width: 580px; line-height: 1.7;
 }
 
 /* Metric strip */
 .metric-strip {
     display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 1px; background: #e2e8f0; border: 1px solid #e2e8f0;
+    gap: 1px; background: #e8ddd0; border: 1px solid #e8ddd0;
     border-radius: 8px; overflow: hidden; margin-bottom: 2.5rem;
 }
-.metric-cell { background: #fafafa; padding: 1.25rem 1.5rem; }
+.metric-cell { background: #fdf9f4; padding: 1.25rem 1.5rem; }
 .metric-value {
     font-family: 'DM Mono', monospace; font-size: 1.9rem;
-    font-weight: 400; color: #0f172a; line-height: 1; letter-spacing: -0.02em;
+    font-weight: 400; color: #2c2416; line-height: 1; letter-spacing: -0.02em;
 }
 .metric-label {
     font-size: 0.67rem; font-weight: 500; letter-spacing: 0.1em;
-    text-transform: uppercase; color: #94a3b8; margin-top: 0.3rem;
+    text-transform: uppercase; color: #a0917f; margin-top: 0.3rem;
 }
 
 /* Feature cards */
-.card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: #e2e8f0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-bottom: 2rem; }
-.card { background: #ffffff; padding: 1.5rem; }
-.card-tab { font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #2563eb; margin-bottom: 0.5rem; }
-.card-title { font-size: 0.95rem; font-weight: 600; color: #0f172a; margin-bottom: 0.5rem; }
-.card-body { font-size: 0.82rem; color: #64748b; line-height: 1.6; }
+.card-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 1px; background: #e8ddd0; border: 1px solid #e8ddd0;
+    border-radius: 8px; overflow: hidden; margin-bottom: 2rem;
+}
+.card { background: #fdf9f4; padding: 1.5rem; }
+.card-tab {
+    font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #1d4ed8; margin-bottom: 0.5rem;
+}
+.card-title { font-size: 0.95rem; font-weight: 600; color: #2c2416; margin-bottom: 0.5rem; }
+.card-body { font-size: 0.82rem; color: #6b5e4e; line-height: 1.6; }
 .card-pills { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem; }
-.card-pill { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #475569; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 3px; padding: 0.25rem 0.5rem; }
+.card-pill {
+    font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #6b5e4e;
+    background: #f3ede4; border: 1px solid #e8ddd0;
+    border-radius: 3px; padding: 0.25rem 0.5rem;
+}
 
 /* Stack grid */
-.stack-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-top: 0.75rem; margin-bottom: 2rem; }
-.stack-item { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 6px; padding: 0.75rem 0.9rem; }
-.stack-layer { font-family: 'DM Mono', monospace; font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.2rem; }
-.stack-tech { font-size: 0.82rem; font-weight: 500; color: #0f172a; }
+.stack-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 0.6rem; margin-top: 0.75rem; margin-bottom: 2rem;
+}
+.stack-item {
+    background: #f3ede4; border: 1px solid #e8ddd0;
+    border-radius: 6px; padding: 0.75rem 0.9rem;
+}
+.stack-layer {
+    font-family: 'DM Mono', monospace; font-size: 0.6rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #a0917f; margin-bottom: 0.2rem;
+}
+.stack-tech { font-size: 0.82rem; font-weight: 500; color: #2c2416; }
 
 /* Section header */
 .section-header {
     font-family: 'DM Mono', monospace; font-size: 0.67rem; font-weight: 500;
-    letter-spacing: 0.14em; text-transform: uppercase; color: #94a3b8;
-    padding-bottom: 0.6rem; border-bottom: 1px solid #f1f5f9;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #a0917f;
+    padding-bottom: 0.6rem; border-bottom: 1px solid #e8ddd0;
     margin-bottom: 1.25rem; margin-top: 1.75rem;
 }
 
-/* Dataframe mono font */
+/* Dataframe — warm background */
 .stDataFrame { font-family: 'DM Mono', monospace !important; }
+[data-testid="stDataFrame"] > div { background-color: #fdf9f4 !important; }
 
 /* Sidebar */
-section[data-testid="stSidebar"] { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
+section[data-testid="stSidebar"] {
+    background-color: #f3ede4;
+    font-family: 'DM Mono', monospace;
+    font-size: 0.8rem;
+}
+section[data-testid="stSidebar"] .stButton button {
+    background-color: #fdf9f4;
+    border: 1px solid #e8ddd0;
+    color: #6b5e4e;
+}
+section[data-testid="stSidebar"] .stButton button:hover {
+    background-color: #efe8de;
+    border-color: #d4c4b0;
+}
+
+/* Input fields — warm tint */
+.stTextInput input {
+    background-color: #fdf9f4 !important;
+    border-color: #e8ddd0 !important;
+    color: #2c2416 !important;
+    font-family: 'DM Mono', monospace;
+}
+.stSelectbox > div > div {
+    background-color: #fdf9f4 !important;
+    border-color: #e8ddd0 !important;
+}
+
+/* Chat input */
+.stChatInput textarea {
+    background-color: #fdf9f4 !important;
+    border-color: #e8ddd0 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
