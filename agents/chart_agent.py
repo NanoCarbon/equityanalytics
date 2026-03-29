@@ -243,8 +243,9 @@ def generate_chart(df: pd.DataFrame, user_prompt: str):
 
 st.set_page_config(
     page_title="Equity Analytics",
+    page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"   # was "collapsed"
+    initial_sidebar_state="collapsed"
 )
 
 st.markdown("""
@@ -686,36 +687,39 @@ with tab_overview:
 # TAB 2 — AI ANALYTICS CHAT
 # ══════════════════════════════════════════════════════════════════════════════
 
-with tab_chat:
+EXAMPLE_PROMPTS = {
+    "Price & Returns": [
+        "Compare cumulative returns for SPY, QQQ and IWM over the last year",
+        "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
+        "Which sector had the highest average daily return last month?",
+        "Compare JPM and GS closing prices over the last 6 months",
+        "Show me tickers trading closest to their 52-week high",
+    ],
+    "Macro & Cross-Asset": [
+        "How did SPY perform during periods when the yield curve was inverted?",
+        "Compare SPY daily returns against the Fed funds rate over the last year",
+        "Show me the Fed funds rate and CPI together over the last 3 years",
+        "Show me the 10Y-2Y yield spread trend",
+    ],
+    "Fundamentals": [
+        "Show me AAPL's revenue and net income trend over the last 4 years",
+        "Which S&P 500 stocks have the lowest trailing PE ratio?",
+        "Compare operating margins for AAPL, MSFT, GOOGL and META",
+        "Show me the top 10 stocks by free cash flow yield",
+        "How has JPM's return on equity changed over time?",
+        "Compare debt-to-equity ratios across bank stocks",
+        "Which stocks have the highest revenue growth?",
+    ],
+}
 
-    with st.sidebar:
-        st.markdown("**Example prompts**")
-        examples = [
-            "Compare cumulative returns for SPY, QQQ and IWM over the last year",
-            "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
-            "Which sector had the highest average daily return last month?",
-            "Show me the top 5 tickers by average volume",
-            "Compare JPM and GS closing prices over the last 6 months",
-            "Show me tickers trading closest to their 52-week high",
-            "How did SPY perform during periods when the yield curve was inverted?",
-            "Compare SPY daily returns against the Fed funds rate over the last year",
-            "Show me AAPL's revenue and net income trend over the last 4 years",
-            "Which S&P 500 stocks have the lowest trailing PE ratio?",
-            "Compare operating margins for AAPL, MSFT, GOOGL and META",
-            "Show me the top 10 stocks by free cash flow yield",
-            "How has JPM's return on equity changed over time?",
-            "Compare debt-to-equity ratios across bank stocks",
-            "Which stocks have the highest revenue growth?",
-        ]
-        for ex in examples:
-            if st.button(ex, use_container_width=True, key=f"chat_ex_{ex[:30]}"):
-                st.session_state.pending_prompt = ex
+with tab_chat:
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "pending_prompt" not in st.session_state:
         st.session_state.pending_prompt = None
 
+    # ── Chat history ───────────────────────────────────────────────────────────
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             if msg["role"] == "assistant":
@@ -729,7 +733,46 @@ with tab_chat:
             else:
                 st.write(msg["content"])
 
-    prompt = st.chat_input("Ask a question or request a chart…")
+    # ── Prompt suggestions (shown only when no conversation yet) ──────────────
+    if not st.session_state.messages:
+        st.markdown("**Ask a question or choose a prompt:**")
+        st.markdown("""
+        <style>
+        .prompt-group-label {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.65rem;
+            font-weight: 500;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #666666;
+            margin-bottom: 0.4rem;
+            margin-top: 1rem;
+        }
+        .prompt-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+            margin-bottom: 0.25rem;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
+        for group, prompts in EXAMPLE_PROMPTS.items():
+            st.markdown(f'<div class="prompt-group-label">{group}</div>', unsafe_allow_html=True)
+            # Render each prompt as a small button in columns
+            cols = st.columns(len(prompts))
+            for col, p in zip(cols, prompts):
+                with col:
+                    if st.button(
+                        p,
+                        key=f"suggestion_{p[:40]}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.pending_prompt = p
+                        st.rerun()
+
+    # ── Chat input ─────────────────────────────────────────────────────────────
+    prompt = st.chat_input("Ask a question or choose a prompt above…")
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
