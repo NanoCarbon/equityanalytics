@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['ticker', 'snapshot_date'],
     on_schema_change='sync_all_columns',
-    schema='marts'
+    schema='marts',
+    cluster_by=['snapshot_date', 'ticker']
 ) }}
 
 {#
@@ -15,6 +16,9 @@
     "When was AAPL's PE ratio at its lowest in the last year?"
 
     Incremental: append new snapshot dates only.
+
+    Clustering: snapshot_date first because most queries filter by date range
+    across many tickers (matching the daily_prices access pattern).
 #}
 
 with valuations as (

@@ -2,8 +2,17 @@
     materialized='incremental',
     unique_key=['ticker', 'price_date'],
     on_schema_change='sync_all_columns',
-    schema='marts'
+    schema='marts',
+    cluster_by=['price_date', 'ticker']
 ) }}
+
+{#
+    Cluster by price_date first because the dominant query pattern is date-range
+    scans across all tickers (e.g. "last 365 days"). Clustering on ticker first
+    would be better for single-ticker lookups but those are less common and already
+    fast given Snowflake's micro-partition pruning.
+    Snowflake auto-clustering maintains these keys over time on large tables.
+#}
 
 with returns as (
     select * from {{ ref('int_daily_returns') }}

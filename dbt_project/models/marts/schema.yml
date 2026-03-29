@@ -2,7 +2,10 @@ version: 2
 
 models:
   - name: fact_daily_prices
-    description: "Daily price and return metrics per security. Grain: ticker + price_date."
+    description: >
+      Daily price and return metrics per security.
+      Grain: ticker + price_date.
+      Clustered by price_date, ticker for efficient date-range scans.
     columns:
       - name: ticker
         tests:
@@ -47,8 +50,10 @@ models:
 
   - name: fact_fundamentals
     description: >
-      Pivoted financial statement data. Grain: ticker + period_end_date + frequency.
+      Pivoted financial statement data.
+      Grain: ticker + period_end_date + frequency.
       Contains income statement, balance sheet, and cash flow line items as columns.
+      Clustered by ticker, period_end_date.
     columns:
       - name: ticker
         tests:
@@ -64,12 +69,29 @@ models:
 
   - name: fact_valuation_snapshot
     description: >
-      Point-in-time valuation ratios and metrics. Grain: ticker + snapshot_date.
+      Point-in-time valuation ratios and metrics.
+      Grain: ticker + snapshot_date.
       Daily snapshots enable time-series analysis of PE, margins, etc.
+      Clustered by snapshot_date, ticker.
     columns:
       - name: ticker
         tests:
           - not_null
       - name: snapshot_date
+        tests:
+          - not_null
+
+  - name: fact_macro_readings
+    description: >
+      Macro indicator observations from FRED.
+      Grain: series_id + observation_date.
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+      - name: observation_date
+        tests:
+          - not_null
+      - name: value
         tests:
           - not_null

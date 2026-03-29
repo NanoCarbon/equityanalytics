@@ -2,7 +2,8 @@
     materialized='incremental',
     unique_key=['ticker', 'period_end_date', 'frequency'],
     on_schema_change='sync_all_columns',
-    schema='marts'
+    schema='marts',
+    cluster_by=['ticker', 'period_end_date']
 ) }}
 
 {#
@@ -14,6 +15,11 @@
 
     Incremental strategy: append new reporting periods only.
     New tickers require --full-refresh (same pattern as fact_daily_prices).
+
+    Clustering: ticker + period_end_date covers both single-ticker time series
+    queries ("AAPL revenue over 4 years") and cross-sectional queries filtered
+    to a specific period ("all tickers Q3 2024"). frequency has only 2 values
+    so it's not a useful cluster key.
 #}
 
 with fundamentals as (
