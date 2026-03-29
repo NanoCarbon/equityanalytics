@@ -2,10 +2,6 @@
     {%- if custom_schema_name is none -%}
         {{ default_schema }}
     {%- else -%}
-        {%- if target.name == 'prod' -%}
-            {{ custom_schema_name | trim }}
-        {%- else -%}
-            dev_{{ custom_schema_name | trim }}
-        {%- endif -%}
+        {{ custom_schema_name | trim }}
     {%- endif -%}
 {%- endmacro %}
