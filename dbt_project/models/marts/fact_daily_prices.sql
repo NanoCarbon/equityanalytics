@@ -1,5 +1,14 @@
+{{ config(
+    materialized='incremental',
+    unique_key=['ticker', 'price_date'],
+    on_schema_change='sync_all_columns'
+) }}
+
 with returns as (
     select * from {{ ref('int_daily_returns') }}
+    {% if is_incremental() %}
+    where price_date > (select max(price_date) from {{ this }})
+    {% endif %}
 ),
 
 dim_security as (
