@@ -243,9 +243,8 @@ def generate_chart(df: pd.DataFrame, user_prompt: str):
 
 st.set_page_config(
     page_title="Equity Analytics",
-    page_icon="📈",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"   # was "collapsed"
 )
 
 st.markdown("""
