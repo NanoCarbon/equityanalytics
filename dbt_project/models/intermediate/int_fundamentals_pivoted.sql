@@ -79,7 +79,7 @@ pivoted as (
         case when max(case when line_item = 'Total Revenue' then value end) > 0
              then max(case when line_item = 'Net Income' then value end)
                   / max(case when line_item = 'Total Revenue' then value end)
-        end                                                                                as net_margin                                                                        as net_margin
+        end
 
     from statements
     group by ticker, period_end_date, frequency
