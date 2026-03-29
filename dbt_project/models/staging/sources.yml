@@ -11,3 +11,7 @@ sources:
         description: "Raw company metadata from yfinance"
       - name: macro_indicators
         description: "Raw macro economic indicators from FRED API"
+      - name: financial_statements
+        description: "Raw financial statement data from yfinance (EAV format: income stmt, balance sheet, cash flow)"
+      - name: valuation_metrics
+        description: "Raw point-in-time valuation ratios and metrics from yfinance .info"
