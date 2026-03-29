@@ -1,3 +1,5 @@
+{{ config(schema='marts') }}
+
 with companies as (
     select * from {{ ref('stg_companies') }}
 ),
