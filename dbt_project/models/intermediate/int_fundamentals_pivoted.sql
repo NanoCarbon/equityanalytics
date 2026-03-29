@@ -1,17 +1,5 @@
 {{ config(schema='staging') }}
 
-{#
-    Pivots the EAV financial statement data into a wide format with one row
-    per ticker + period + frequency, with the ~25 most important line items
-    as named columns.
-
-    This is the analyst-friendly view. The full EAV remains in staging
-    for ad-hoc queries on less common line items.
-
-    Line item names come from yfinance and use CamelCase (e.g. "TotalRevenue").
-    We pivot using conditional aggregation which is safe for the EAV grain.
-#}
-
 with statements as (
     select * from {{ ref('stg_financial_statements') }}
 ),
@@ -22,7 +10,7 @@ pivoted as (
         period_end_date,
         frequency,
 
-       -- Income statement
+        -- Income statement
         max(case when line_item = 'Total Revenue' then value end)                          as total_revenue,
         max(case when line_item = 'Cost Of Revenue' then value end)                        as cost_of_revenue,
         max(case when line_item = 'Gross Profit' then value end)                           as gross_profit,
@@ -63,27 +51,26 @@ pivoted as (
         max(case when line_item = 'Depreciation And Amortization' then value end)          as depreciation_and_amortization,
         max(case when line_item = 'Stock Based Compensation' then value end)               as stock_based_compensation,
         max(case when line_item = 'Common Stock Dividend Paid' then value end)             as dividends_paid,
-        max(case when line_item = 'Repurchase Of Capital Stock' then value end)            as share_repurchases,
-
-        -- Derived margins
-        case when max(case when line_item = 'Total Revenue' then value end) > 0
-             then max(case when line_item = 'Gross Profit' then value end)
-                  / max(case when line_item = 'Total Revenue' then value end)
-        end                                                                                as gross_margin,
-
-        case when max(case when line_item = 'Total Revenue' then value end) > 0
-             then max(case when line_item = 'Operating Income' then value end)
-                  / max(case when line_item = 'Total Revenue' then value end)
-        end                                                                                as operating_margin,
-
-        case when max(case when line_item = 'Total Revenue' then value end) > 0
-             then max(case when line_item = 'Net Income' then value end)
-                  / max(case when line_item = 'Total Revenue' then value end)
-        end
+        max(case when line_item = 'Repurchase Of Capital Stock' then value end)            as share_repurchases
 
     from statements
     group by ticker, period_end_date, frequency
+),
+
+with_margins as (
+    select
+        *,
+        case when total_revenue > 0
+             then gross_profit / total_revenue
+        end as gross_margin,
+        case when total_revenue > 0
+             then operating_income / total_revenue
+        end as operating_margin,
+        case when total_revenue > 0
+             then net_income / total_revenue
+        end as net_margin
+    from pivoted
 )
 
-select * from pivoted
+select * from with_margins
 where total_revenue is not null or total_assets is not null or operating_cash_flow is not null
