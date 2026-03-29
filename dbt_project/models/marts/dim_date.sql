@@ -20,10 +20,3 @@ select
          || ' ' || extract(year from date_day)         as fiscal_quarter_label
 
 from date_spine
-```
-
-Two changes — start date moved from `2020-01-01` to `2010-01-01` and rowcount bumped from `3000` to `6000` to cover the longer range.
-
-Save, then run:
-```
-dbt build --select dim_date fact_daily_prices --full-refresh
