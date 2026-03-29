@@ -1,4 +1,4 @@
-name: dbt CI
+name: dbt CI/CD
 
 on:
   pull_request:
@@ -6,9 +6,14 @@ on:
     paths:
       - 'dbt_project/**'
       - 'dbt_project.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dbt_project/**'
+      - 'dbt_project.yml'
 
 jobs:
-  dbt-test:
+  dbt-run:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,12 +28,16 @@ jobs:
       - name: Install dbt
         run: pip install dbt-snowflake
 
+      - name: Write private key
+        run: |
+          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
+
       - name: Configure dbt profile
         run: |
           mkdir -p ~/.dbt
           cat > ~/.dbt/profiles.yml << EOF
           equity_analytics:
-            target: ci
+            target: ${{ github.event_name == 'push' && 'prod' || 'ci' }}
             outputs:
               ci:
                 type: snowflake
@@ -40,13 +49,37 @@ jobs:
                 warehouse: TRANSFORM_WH
                 schema: CI_${{ github.event.pull_request.number }}
                 threads: 4
+              prod:
+                type: snowflake
+                account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+                user: ${{ secrets.SNOWFLAKE_USER }}
+                private_key_path: /tmp/snowflake_key.p8
+                role: ACCOUNTADMIN
+                database: EQUITY_ANALYTICS
+                warehouse: TRANSFORM_WH
+                schema: MARTS
+                threads: 4
           EOF
-
-      - name: Write private key
-        run: |
-          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
 
       - name: Run dbt build
         run: |
           dbt deps --profiles-dir ~/.dbt
-          dbt build --profiles-dir ~/.dbt --target ci
+          dbt build --profiles-dir ~/.dbt
+
+      - name: Cleanup CI schema
+        if: github.event_name == 'pull_request'
+        run: |
+          python -c "
+          import snowflake.connector, os
+          conn = snowflake.connector.connect(
+              user=os.environ['SNOWFLAKE_USER'],
+              account=os.environ['SNOWFLAKE_ACCOUNT'],
+              private_key_path='/tmp/snowflake_key.p8',
+              role='ACCOUNTADMIN'
+          )
+          conn.cursor().execute('DROP SCHEMA IF EXISTS EQUITY_ANALYTICS.CI_${{ github.event.pull_request.number }}')
+          conn.close()
+          "
+        env:
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
