@@ -1,4 +1,5 @@
-name: AI Code Review
+- name: Install dependencies
+  run: pip install anthropic python-dotenv requests
 
 on:
   pull_request:
