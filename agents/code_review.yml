@@ -7,7 +7,6 @@ on:
 permissions:
   pull-requests: write
   issues: write
-  contents: read
 
 jobs:
   code-review:
@@ -23,12 +22,11 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: python -m pip install --upgrade pip anthropic python-dotenv requests
+        run: python -m pip install anthropic python-dotenv
 
       - name: Run code review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python agents/code_reviewer.py
 
       - name: Post review as PR comment
