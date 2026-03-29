@@ -159,6 +159,9 @@ Rules:
 - Date range in the warehouse is approximately the last 365 days
 - Always include TICKER in SELECT when querying multiple tickers
 - Order results by PRICE_DATE ASC for time series charts
+- Generate EXACTLY ONE SQL statement — never multiple SELECTs separated by semicolons   # ← ADD
+- To compare multiple tickers or time periods, use a single query with IN() clauses, CTEs, or UNION ALL   # ← ADD
+- Do not end your SQL with a semicolon
 """
 
 # ── Snowflake connection (cached for the session) ─────────────────────────────
@@ -186,21 +189,27 @@ def get_snowflake_connection():
 
 
 def execute_sql(sql: str) -> pd.DataFrame:
-    """
-    Execute SQL against Snowflake with a statement-level timeout.
-    Reconnects automatically if the cached connection has gone stale.
-    """
     conn = get_snowflake_connection()
-
-    # Snowflake statement timeout (seconds) — prevents runaway queries
     QUERY_TIMEOUT_SECONDS = 30
+
+    # Split and execute multiple statements if Claude generates more than one
+    statements = [s.strip() for s in sql.strip().split(';') if s.strip()]
 
     start = time.monotonic()
     try:
         cursor = conn.cursor()
         cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {QUERY_TIMEOUT_SECONDS}")
-        cursor.execute(sql)
-        df = cursor.fetch_pandas_all()
+
+        if len(statements) == 1:
+            cursor.execute(statements[0])
+            df = cursor.fetch_pandas_all()
+        else:
+            frames = []
+            for stmt in statements:
+                cursor.execute(stmt)
+                frames.append(cursor.fetch_pandas_all())
+            df = pd.concat(frames, ignore_index=True)
+
         df.columns = [c.lower() for c in df.columns]
         elapsed = time.monotonic() - start
         logger.info("Query completed in %.2fs, returned %d rows", elapsed, len(df))
@@ -210,7 +219,6 @@ def execute_sql(sql: str) -> pd.DataFrame:
         raise
     except Exception as e:
         logger.error("Unexpected error during query: %s", e)
-        # Clear the cached connection so the next call gets a fresh one
         get_snowflake_connection.clear()
         raise
 
