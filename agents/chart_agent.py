@@ -390,14 +390,32 @@ p, span, div, label, h1, h2, h3, h4, h5, h6,
 }
 .stNumberInput > div { background-color: #ffffff !important; border-color: #e8ddd0 !important; }
 
-/* Chat input */
-.stChatInput textarea,
-.stChatInput textarea::placeholder {
+/* Chat input — remove dark shadow/container, clean border only */
+.stChatInput {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+.stChatInput > div {
     background-color: #ffffff !important;
-    border-color: #e8ddd0 !important;
+    border: 1px solid #d4c9bc !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+}
+.stChatInput textarea {
+    background-color: #ffffff !important;
     color: #1a1a1a !important;
+    box-shadow: none !important;
 }
 .stChatInput textarea::placeholder { color: #999999 !important; }
+
+/* Chat message avatars */
+[data-testid="stChatMessageAvatarUser"] {
+    background-color: #a8d5b5 !important;
+}
+[data-testid="stChatMessageAvatarAssistant"] {
+    background-color: #a8c4e0 !important;
+}
 
 /* ── Sidebar ── */
 section[data-testid="stSidebar"] {
@@ -418,6 +436,85 @@ section[data-testid="stSidebar"] .stButton button {
 section[data-testid="stSidebar"] .stButton button:hover {
     background-color: #efe8de;
     border-color: #d4c4b0;
+}
+
+/* ── Expanders — keep warm background in all states ── */
+[data-testid="stExpander"] {
+    background-color: #fdf9f4 !important;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 6px !important;
+}
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary:hover,
+[data-testid="stExpander"] summary:focus,
+[data-testid="stExpander"] summary:active,
+[data-testid="stExpander"][open] summary {
+    background-color: #fdf9f4 !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stExpander"] summary:hover {
+    background-color: #f0ece6 !important;
+}
+[data-testid="stExpander"] > div {
+    background-color: #fdf9f4 !important;
+}
+/* Expander header text and arrow */
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] summary svg {
+    color: #1a1a1a !important;
+    fill: #1a1a1a !important;
+}
+
+/* ── Code blocks (SQL expander) — white background, dark text ── */
+/* Overrides dark syntax highlighting theme that clashes with warm bg */
+.stCode, [data-testid="stCode"] {
+    background-color: #ffffff !important;
+}
+.stCode pre, [data-testid="stCode"] pre {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 6px !important;
+}
+/* Syntax tokens — keep readable on white */
+.stCode code, [data-testid="stCode"] code,
+.stCode span, [data-testid="stCode"] span {
+    background-color: #ffffff !important;
+}
+
+/* ── Dataframe toolbar tooltips and hover overlays ── */
+/* The download button tooltip and column menu appear dark — force white */
+[data-testid="stDataFrameResizeHandle"],
+[data-testid="stDataFrame"] button,
+[data-testid="stDataFrame"] button svg,
+[data-testid="stDataFrame"] [role="tooltip"],
+[data-testid="stDataFrame"] [data-testid="stTooltipHoverTarget"] {
+    color: #1a1a1a !important;
+    background-color: #ffffff !important;
+}
+/* Toolbar icon buttons (download, fullscreen, search) */
+[data-testid="stDataFrame"] .dvn-scroller ~ div button,
+[data-testid="stElementToolbar"] {
+    background-color: #ffffff !important;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 4px !important;
+}
+[data-testid="stElementToolbar"] button {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stElementToolbar"] button:hover {
+    background-color: #f0ece6 !important;
+}
+[data-testid="stElementToolbar"] button svg path {
+    fill: #1a1a1a !important;
+    stroke: #1a1a1a !important;
+}
+/* Column header hover menu and sort arrows */
+[data-testid="stDataFrame"] th button {
+    background-color: transparent !important;
+    color: #1a1a1a !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -687,32 +784,44 @@ with tab_overview:
 # TAB 2 — AI ANALYTICS CHAT
 # ══════════════════════════════════════════════════════════════════════════════
 
-EXAMPLE_PROMPTS = {
-    "Price & Returns": [
-        "Compare cumulative returns for SPY, QQQ and IWM over the last year",
-        "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
-        "Which sector had the highest average daily return last month?",
-        "Compare JPM and GS closing prices over the last 6 months",
-        "Show me tickers trading closest to their 52-week high",
-    ],
-    "Macro & Cross-Asset": [
-        "How did SPY perform during periods when the yield curve was inverted?",
-        "Compare SPY daily returns against the Fed funds rate over the last year",
-        "Show me the Fed funds rate and CPI together over the last 3 years",
-        "Show me the 10Y-2Y yield spread trend",
-    ],
-    "Fundamentals": [
-        "Show me AAPL's revenue and net income trend over the last 4 years",
-        "Which S&P 500 stocks have the lowest trailing PE ratio?",
-        "Compare operating margins for AAPL, MSFT, GOOGL and META",
-        "Show me the top 10 stocks by free cash flow yield",
-        "How has JPM's return on equity changed over time?",
-        "Compare debt-to-equity ratios across bank stocks",
-        "Which stocks have the highest revenue growth?",
-    ],
-}
+EXAMPLE_PROMPTS = [
+    "Compare cumulative returns for SPY, QQQ and IWM over the last year",
+    "How did SPY perform during periods when the yield curve was inverted?",
+    "Show me AAPL's revenue and net income trend over the last 4 years",
+    "Which S&P 500 stocks have the lowest trailing PE ratio?",
+    "Compare operating margins for AAPL, MSFT, GOOGL and META",
+]
 
 with tab_chat:
+
+    # Force suggestion buttons to look like light chips regardless of OS theme
+    st.markdown("""
+    <style>
+    div[data-testid="stHorizontalBlock"] .stButton button {
+        background-color: #f0ece6 !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d4c9bc !important;
+        border-radius: 6px !important;
+        font-family: 'DM Mono', monospace !important;
+        font-size: 0.75rem !important;
+        font-weight: 400 !important;
+        padding: 0.5rem 0.75rem !important;
+        white-space: normal !important;
+        text-align: left !important;
+        line-height: 1.4 !important;
+        transition: background-color 0.15s, border-color 0.15s !important;
+        min-height: 3rem !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton button:hover {
+        background-color: #ddd6cc !important;
+        border-color: #b8ada0 !important;
+        color: #1a1a1a !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton button:active {
+        background-color: #ccc4ba !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -736,43 +845,16 @@ with tab_chat:
     # ── Prompt suggestions (shown only when no conversation yet) ──────────────
     if not st.session_state.messages:
         st.markdown("**Ask a question or choose a prompt:**")
-        st.markdown("""
-        <style>
-        .prompt-group-label {
-            font-family: 'DM Mono', monospace;
-            font-size: 0.65rem;
-            font-weight: 500;
-            letter-spacing: 0.12em;
-            text-transform: uppercase;
-            color: #666666;
-            margin-bottom: 0.4rem;
-            margin-top: 1rem;
-        }
-        .prompt-chip-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.4rem;
-            margin-bottom: 0.25rem;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-
-        for group, prompts in EXAMPLE_PROMPTS.items():
-            st.markdown(f'<div class="prompt-group-label">{group}</div>', unsafe_allow_html=True)
-            # Render each prompt as a small button in columns
-            cols = st.columns(len(prompts))
-            for col, p in zip(cols, prompts):
-                with col:
-                    if st.button(
-                        p,
-                        key=f"suggestion_{p[:40]}",
-                        use_container_width=True,
-                    ):
-                        st.session_state.pending_prompt = p
-                        st.rerun()
+        st.write("")
+        cols = st.columns(len(EXAMPLE_PROMPTS))
+        for col, p in zip(cols, EXAMPLE_PROMPTS):
+            with col:
+                if st.button(p, key=f"suggestion_{p[:40]}", use_container_width=True):
+                    st.session_state.pending_prompt = p
+                    st.rerun()
 
     # ── Chat input ─────────────────────────────────────────────────────────────
-    prompt = st.chat_input("Ask a question or choose a prompt above…")
+    prompt = st.chat_input("Type here...")
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
