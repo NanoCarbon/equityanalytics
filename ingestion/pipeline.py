@@ -2,23 +2,36 @@ from prefect import flow, task, get_run_logger
 import pandas as pd
 
 
+@task(name="get-ticker-list", retries=2)
+def task_get_tickers() -> list:
+    logger = get_run_logger()
+    from ingestion.extract import get_all_tickers
+    tickers = get_all_tickers()
+    logger.info(f"Loaded {len(tickers)} tickers")
+    return tickers
+
+
 @task(name="get-max-date", retries=2)
 def task_get_max_date() -> object:
     logger = get_run_logger()
     from ingestion.load import get_max_date
     max_date = get_max_date("PRICES")
     if max_date:
-        logger.info(f"Latest date in Snowflake: {max_date} — running incremental load")
+        logger.info(f"Latest date in Snowflake: {max_date} — incremental load")
     else:
-        logger.info("No existing data found — running full historical load")
+        logger.info("No existing data — full historical load")
     return max_date
 
 
-@task(name="extract-prices", retries=3, retry_delay_seconds=30)
-def task_extract_prices(max_date: object, lookback_days: int = 365) -> pd.DataFrame:
+@task(name="extract-prices", retries=3, retry_delay_seconds=60)
+def task_extract_prices(
+    tickers: list,
+    max_date: object,
+    lookback_days: int = 365
+) -> pd.DataFrame:
     logger = get_run_logger()
-    from ingestion.extract import extract_prices, TICKERS
-    df = extract_prices(TICKERS, start_date=max_date, lookback_days=lookback_days)
+    from ingestion.extract import extract_prices
+    df = extract_prices(tickers, start_date=max_date, lookback_days=lookback_days)
     if df.empty:
         logger.info("No new prices to load")
     else:
@@ -26,10 +39,19 @@ def task_extract_prices(max_date: object, lookback_days: int = 365) -> pd.DataFr
     return df
 
 
-@task(name="extract-company-info", retries=3, retry_delay_seconds=60)
-def task_extract_company_info() -> pd.DataFrame:
-    from ingestion.extract import extract_company_info, TICKERS
-    return extract_company_info(TICKERS)
+@task(
+    name="extract-company-info",
+    retries=2,
+    retry_delay_seconds=60,
+    timeout_seconds=3600  # 1 hour max — 600 tickers × 2s = ~20 min
+)
+def task_extract_company_info(tickers: list) -> pd.DataFrame:
+    logger = get_run_logger()
+    from ingestion.extract import extract_company_info
+    logger.info(f"Fetching metadata for {len(tickers)} tickers with 2s delay")
+    df = extract_company_info(tickers, delay_seconds=2.0)
+    logger.info(f"Fetched metadata for {len(df)} tickers")
+    return df
 
 
 @task(name="load-prices", retries=2)
@@ -66,11 +88,7 @@ def task_extract_fred(lookback_days: int = 365) -> pd.DataFrame:
     return df
 
 
-@task(
-    name="load-macro-indicators",
-    retries=2,
-    description="Load FRED macro data to Snowflake RAW.MACRO_INDICATORS"
-)
+@task(name="load-macro-indicators", retries=2)
 def task_load_macro(df: pd.DataFrame) -> int:
     logger = get_run_logger()
     if df.empty:
@@ -84,9 +102,10 @@ def task_load_macro(df: pd.DataFrame) -> int:
 
 @flow(name="equity-ingestion-pipeline", log_prints=True)
 def equity_pipeline(lookback_days: int = 365):
+    tickers = task_get_tickers()
     max_date = task_get_max_date()
-    prices_df = task_extract_prices(max_date, lookback_days)
-    company_df = task_extract_company_info()
+    prices_df = task_extract_prices(tickers, max_date, lookback_days)
+    company_df = task_extract_company_info(tickers)
     task_load_prices(prices_df)
     task_load_company_info(company_df)
 
