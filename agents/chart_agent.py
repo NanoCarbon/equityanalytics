@@ -1,10 +1,11 @@
 import os
 import json
 import logging
-import hashlib
 import time
+import re
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 import pandas as pd
 import snowflake.connector
 from anthropic import Anthropic
@@ -22,6 +23,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 client = Anthropic()
+
+# ── System prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are a financial data analyst assistant with access to an equity analytics data warehouse.
 
@@ -60,120 +63,47 @@ EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS - grain: one row per series per obser
 - OBSERVATION_DATE: date — date of the observation
 - VALUE: float — the indicator value
 
-Series reference:
-- DFF: Federal Funds Rate (daily, %)
-- CPIAUCSL: Consumer Price Index (monthly, index level)
-- T10Y2Y: 10yr minus 2yr Treasury spread (daily, %) — negative = inverted yield curve
-- UNRATE: Unemployment Rate (monthly, %)
-
 FACT_FUNDAMENTALS - grain: one row per ticker per reporting period per frequency
-- TICKER: varchar — stock ticker e.g. 'AAPL', 'MSFT'
-- PERIOD_END_DATE: date — fiscal period end date e.g. '2024-09-28'
+- TICKER: varchar
+- PERIOD_END_DATE: date
 - FREQUENCY: varchar — 'annual' or 'quarterly'
-- TOTAL_REVENUE: float — total revenue in USD
-- COST_OF_REVENUE: float
-- GROSS_PROFIT: float
-- OPERATING_INCOME: float
-- NET_INCOME: float
-- EBITDA: float
-- EBIT: float
-- RESEARCH_AND_DEVELOPMENT: float
-- SELLING_GENERAL_ADMIN: float
-- INTEREST_EXPENSE: float
-- DILUTED_EPS: float — diluted earnings per share
-- BASIC_EPS: float
-- DILUTED_SHARES: float — diluted share count
-- TAX_PROVISION: float
-- TOTAL_ASSETS: float
-- TOTAL_LIABILITIES: float
-- STOCKHOLDERS_EQUITY: float
-- CASH_AND_EQUIVALENTS: float
-- CASH_AND_SHORT_TERM_INVESTMENTS: float
-- TOTAL_DEBT: float
-- NET_DEBT: float
-- CURRENT_ASSETS: float
-- CURRENT_LIABILITIES: float
-- INVENTORY: float
-- ACCOUNTS_RECEIVABLE: float
-- ACCOUNTS_PAYABLE: float
-- RETAINED_EARNINGS: float
-- NET_PPE: float — net property, plant & equipment
-- OPERATING_CASH_FLOW: float
-- CAPITAL_EXPENDITURE: float — typically negative
-- FREE_CASH_FLOW: float
-- INVESTING_CASH_FLOW: float
-- FINANCING_CASH_FLOW: float
-- DEPRECIATION_AND_AMORTIZATION: float
-- STOCK_BASED_COMPENSATION: float
-- DIVIDENDS_PAID: float — typically negative
-- SHARE_REPURCHASES: float — typically negative
-- GROSS_MARGIN: float — decimal e.g. 0.45 = 45%
-- OPERATING_MARGIN: float
-- NET_MARGIN: float
+- TOTAL_REVENUE, GROSS_PROFIT, OPERATING_INCOME, NET_INCOME, EBITDA: float
+- DILUTED_EPS, BASIC_EPS, DILUTED_SHARES: float
+- TOTAL_ASSETS, TOTAL_LIABILITIES, STOCKHOLDERS_EQUITY: float
+- CASH_AND_EQUIVALENTS, TOTAL_DEBT, NET_DEBT: float
+- OPERATING_CASH_FLOW, FREE_CASH_FLOW, CAPITAL_EXPENDITURE: float
+- GROSS_MARGIN, OPERATING_MARGIN, NET_MARGIN: float (decimals, 0.45 = 45%)
 
 FACT_VALUATION_SNAPSHOT - grain: one row per ticker per snapshot date
 - TICKER: varchar
 - SNAPSHOT_DATE: date
-- TRAILING_PE: float — trailing 12-month P/E ratio
-- FORWARD_PE: float — forward P/E ratio
-- PRICE_TO_BOOK: float
-- PRICE_TO_SALES: float
-- EV_TO_EBITDA: float — enterprise value / EBITDA
-- EV_TO_REVENUE: float
-- PEG_RATIO: float — PE / earnings growth rate
-- GROSS_MARGIN: float — decimal
-- OPERATING_MARGIN: float
-- PROFIT_MARGIN: float
-- EBITDA_MARGIN: float
-- RETURN_ON_EQUITY: float
-- RETURN_ON_ASSETS: float
-- DEBT_TO_EQUITY: float
-- CURRENT_RATIO: float
-- QUICK_RATIO: float
-- TRAILING_EPS: float
-- FORWARD_EPS: float
-- BOOK_VALUE_PER_SHARE: float
-- REVENUE_PER_SHARE: float
-- EARNINGS_GROWTH: float — decimal
-- REVENUE_GROWTH: float
-- EARNINGS_QUARTERLY_GROWTH: float
-- DIVIDEND_YIELD: float — decimal
-- PAYOUT_RATIO: float
-- MARKET_CAP: bigint
-- ENTERPRISE_VALUE: bigint
-- TOTAL_REVENUE: bigint
-- EBITDA: bigint
-- FREE_CASH_FLOW: bigint
-- OPERATING_CASH_FLOW: bigint
-- TOTAL_DEBT: bigint
-- TOTAL_CASH: bigint
+- TRAILING_PE, FORWARD_PE, PRICE_TO_BOOK, PRICE_TO_SALES: float
+- EV_TO_EBITDA, EV_TO_REVENUE, PEG_RATIO: float
+- GROSS_MARGIN, OPERATING_MARGIN, PROFIT_MARGIN, EBITDA_MARGIN: float
+- RETURN_ON_EQUITY, RETURN_ON_ASSETS: float
+- DEBT_TO_EQUITY, CURRENT_RATIO, QUICK_RATIO: float
+- EARNINGS_GROWTH, REVENUE_GROWTH: float (decimals)
+- DIVIDEND_YIELD, PAYOUT_RATIO: float
+- MARKET_CAP, ENTERPRISE_VALUE, TOTAL_DEBT, TOTAL_CASH: bigint
 - BETA: float
 
-Available tickers: Everything in the S&P 500 plus major ETFs like SPY, QQQ, IWM, TLT, GLD.
+Available tickers: Full S&P 500 + major ETFs (SPY, QQQ, IWM, TLT, GLD, etc.)
 
 Rules:
 - Return ONLY valid Snowflake SQL, no markdown, no backticks, no explanation
 - Always use fully qualified table names: EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES
-- For cumulative return charts, use: EXP(SUM(LN(1 + DAILY_RETURN)) OVER (PARTITION BY TICKER ORDER BY PRICE_DATE)) - 1
-- For normalized price charts starting at same point, divide each price by the first price for that ticker
-- Date range in the warehouse is approximately the last 365 days
+- For cumulative return charts: EXP(SUM(LN(1 + DAILY_RETURN)) OVER (PARTITION BY TICKER ORDER BY PRICE_DATE)) - 1
+- Date range in the warehouse is approximately 2010 to present
 - Always include TICKER in SELECT when querying multiple tickers
 - Order results by PRICE_DATE ASC for time series charts
-- Generate EXACTLY ONE SQL statement — never multiple SELECTs separated by semicolons   # ← ADD
-- To compare multiple tickers or time periods, use a single query with IN() clauses, CTEs, or UNION ALL   # ← ADD
-- Do not end your SQL with a semicolon
 """
 
-# ── Snowflake connection (cached for the session) ─────────────────────────────
+# ── Snowflake ─────────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def get_snowflake_connection():
-    """
-    Create and cache a single Snowflake connection for the Streamlit session.
-    st.cache_resource keeps this alive across reruns without reconnecting.
-    """
     logger.info("Opening Snowflake connection")
-    conn = snowflake.connector.connect(
+    return snowflake.connector.connect(
         user=os.environ["SNOWFLAKE_USER"],
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         warehouse="TRANSFORM_WH",
@@ -181,195 +111,496 @@ def get_snowflake_connection():
         schema="MARTS",
         authenticator="programmatic_access_token",
         token=os.environ["SNOWFLAKE_TOKEN"],
-        network_timeout=30,      # fail fast if network is unreachable
+        network_timeout=30,
         login_timeout=15,
     )
-    logger.info("Snowflake connection established")
-    return conn
 
 
 def execute_sql(sql: str) -> pd.DataFrame:
     conn = get_snowflake_connection()
-    QUERY_TIMEOUT_SECONDS = 30
-
-    # Split and execute multiple statements if Claude generates more than one
-    statements = [s.strip() for s in sql.strip().split(';') if s.strip()]
-
     start = time.monotonic()
     try:
         cursor = conn.cursor()
-        cursor.execute(f"ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = {QUERY_TIMEOUT_SECONDS}")
-
-        if len(statements) == 1:
-            cursor.execute(statements[0])
-            df = cursor.fetch_pandas_all()
-        else:
-            frames = []
-            for stmt in statements:
-                cursor.execute(stmt)
-                frames.append(cursor.fetch_pandas_all())
-            df = pd.concat(frames, ignore_index=True)
-
+        cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 30")
+        cursor.execute(sql)
+        df = cursor.fetch_pandas_all()
         df.columns = [c.lower() for c in df.columns]
-        elapsed = time.monotonic() - start
-        logger.info("Query completed in %.2fs, returned %d rows", elapsed, len(df))
+        logger.info("Query %.2fs → %d rows", time.monotonic() - start, len(df))
         return df
     except snowflake.connector.errors.ProgrammingError as e:
-        logger.error("Snowflake query error: %s | SQL: %.200s", e, sql)
+        logger.error("Snowflake error: %s", e)
         raise
     except Exception as e:
-        logger.error("Unexpected error during query: %s", e)
+        logger.error("Unexpected query error: %s", e)
         get_snowflake_connection.clear()
         raise
 
 
-# ── Query result cache ────────────────────────────────────────────────────────
-
 @st.cache_data(ttl=300, show_spinner=False)
 def execute_sql_cached(sql: str) -> pd.DataFrame:
-    """
-    Thin cache wrapper around execute_sql.
-    Identical SQL strings return the cached DataFrame for up to 5 minutes,
-    avoiding redundant round-trips for repeated prompts.
-    """
     return execute_sql(sql)
 
 
-# ── LLM calls ─────────────────────────────────────────────────────────────────
+# ── Data explorer loaders ─────────────────────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_securities() -> pd.DataFrame:
+    return execute_sql("""
+        SELECT ticker, company_name, sector, industry,
+               market_cap_usd, first_trading_date, last_trading_date
+        FROM EQUITY_ANALYTICS.MARTS.DIM_SECURITY
+        ORDER BY market_cap_usd DESC NULLS LAST
+    """)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_macro_series() -> pd.DataFrame:
+    return execute_sql("""
+        SELECT series_id, series_name,
+               MIN(observation_date) AS first_observation,
+               MAX(observation_date) AS last_observation,
+               COUNT(*)              AS observation_count
+        FROM EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS
+        GROUP BY series_id, series_name
+        ORDER BY series_id
+    """)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_summary_stats() -> dict:
+    df = execute_sql("""
+        SELECT
+            (SELECT COUNT(DISTINCT ticker)   FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES)      AS equity_count,
+            (SELECT COUNT(DISTINCT series_id) FROM EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS)   AS macro_series_count,
+            (SELECT COUNT(*)                 FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES)      AS price_rows,
+            (SELECT COUNT(*)                 FROM EQUITY_ANALYTICS.MARTS.FACT_FUNDAMENTALS)      AS fundamental_rows,
+            (SELECT MIN(price_date)          FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES)      AS price_start,
+            (SELECT MAX(price_date)          FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES)      AS price_end
+    """)
+    return df.iloc[0].to_dict() if not df.empty else {}
+
+
+# ── LLM helpers ───────────────────────────────────────────────────────────────
 
 def generate_sql(messages: list) -> str:
-    start = time.monotonic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1000,
         system=SYSTEM_PROMPT,
         messages=messages,
-        timeout=30,  # seconds — prevents indefinite hang
+        timeout=30,
     )
-    elapsed = time.monotonic() - start
-    sql = response.content[0].text.strip()
-    logger.info("SQL generation completed in %.2fs", elapsed)
-    logger.debug("Generated SQL: %.300s", sql)
-    return sql
+    return response.content[0].text.strip()
 
 
 def _parse_chart_config(raw: str) -> dict:
-    """
-    Parse Claude's chart configuration response to a dict.
-
-    Handles three cases in order:
-      1. Raw JSON (ideal)
-      2. JSON wrapped in markdown code fences
-      3. Partial/malformed JSON — falls back to a safe line-chart default
-    """
     text = raw.strip()
-
-    # Strip markdown fences if present
     if text.startswith("```"):
         lines = text.split("\n")
-        # Drop opening fence (and optional language tag) and closing fence
-        inner = [l for l in lines[1:] if l.strip() != "```"]
-        text = "\n".join(inner).strip()
-
+        text = "\n".join(l for l in lines[1:] if l.strip() != "```").strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Could not parse chart config JSON, using fallback. Raw: %.200s", raw)
-        return {
-            "chart_type": "line",
-            "x": None,       # resolved below in generate_chart
-            "y": None,
-            "color": None,
-            "title": "Chart"
-        }
+        logger.warning("Chart config parse failed, using fallback")
+        return {"chart_type": "line", "x": None, "y": None, "color": None, "title": "Chart"}
 
 
 def generate_chart(df: pd.DataFrame, user_prompt: str):
-    """Ask Claude how to visualize the data, then build the Plotly figure."""
-    col_info = {col: str(df[col].dtype) for col in df.columns}
-
-    start = time.monotonic()
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=300,
-        system="""You are a data visualization expert. Given a DataFrame and a user request,
-        return ONLY a valid JSON object with no explanation, no markdown, no backticks.
-        The JSON must have these exact keys:
-        - chart_type: one of 'line', 'bar', 'scatter'
-        - x: column name for x axis
-        - y: column name for y axis
-        - color: column name for color grouping (or null if single series)
-        - title: a short descriptive chart title
-        Use only column names that exist in the provided columns list.
-        Return raw JSON only. Example: {"chart_type": "line", "x": "price_date", "y": "cumulative_return", "color": "ticker", "title": "Cumulative Returns"}""",
-        messages=[{
-            "role": "user",
-            "content": (
-                f"User request: {user_prompt}\n"
-                f"Available columns: {list(df.columns)}\n"
-                f"Sample data: {df.head(2).to_dict()}"
-            )
-        }],
+        system="""Return ONLY a JSON object with keys: chart_type (line/bar/scatter),
+        x (column name), y (column name), color (column name or null), title (string).
+        Use only column names from the provided list. No markdown, no explanation.""",
+        messages=[{"role": "user", "content":
+            f"Request: {user_prompt}\nColumns: {list(df.columns)}\nSample: {df.head(2).to_dict()}"}],
         timeout=15,
     )
-    elapsed = time.monotonic() - start
-    logger.info("Chart config generation completed in %.2fs", elapsed)
-
     config = _parse_chart_config(response.content[0].text)
-
-    # Resolve None axes — fall back to first suitable columns
     cols = list(df.columns)
+
     if not config.get("x") or config["x"] not in df.columns:
         config["x"] = cols[0]
-        logger.warning("x axis not resolved; falling back to '%s'", config["x"])
     if not config.get("y") or config["y"] not in df.columns:
-        # Pick first numeric column that isn't x
-        numeric_cols = df.select_dtypes("number").columns.tolist()
-        config["y"] = next((c for c in numeric_cols if c != config["x"]), cols[-1])
-        logger.warning("y axis not resolved; falling back to '%s'", config["y"])
+        numeric = df.select_dtypes("number").columns.tolist()
+        config["y"] = next((c for c in numeric if c != config["x"]), cols[-1])
     if config.get("color") and config["color"] not in df.columns:
         config["color"] = None
 
-    chart_builders = {
-        "line": px.line,
-        "bar": px.bar,
-        "scatter": px.scatter,
-    }
-    build = chart_builders.get(config["chart_type"], px.line)
-
-    fig = build(
-        df,
-        x=config["x"],
-        y=config["y"],
-        color=config.get("color"),
-        title=config.get("title", ""),
-        template="plotly_white"
-    )
-
+    build = {"line": px.line, "bar": px.bar, "scatter": px.scatter}.get(config["chart_type"], px.line)
+    fig = build(df, x=config["x"], y=config["y"], color=config.get("color"),
+                title=config.get("title", ""), template="plotly_white")
     fig.update_layout(
         xaxis_title=config["x"].replace("_", " ").title(),
         yaxis_title=config["y"].replace("_", " ").title(),
-        legend_title="Ticker" if config.get("color") == "ticker" else ""
+        legend_title="Ticker" if config.get("color") == "ticker" else "",
+        font=dict(family="DM Mono, monospace", size=11),
     )
-
     return fig
 
 
-# ── Streamlit UI ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Equity Analytics Assistant",
+    page_title="Equity Analytics",
     page_icon="📈",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-st.title("📈 Equity Analytics Assistant")
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
 
-tab1, tab2 = st.tabs(["Chat", "Event Study"])
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
-with tab1:
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1200px; }
+
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 0; border-bottom: 1px solid #e2e8f0; background: transparent; margin-bottom: 1.5rem;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'DM Mono', monospace; font-size: 0.72rem; font-weight: 500;
+    letter-spacing: 0.1em; text-transform: uppercase; padding: 0.75rem 1.75rem;
+    color: #94a3b8; border-bottom: 2px solid transparent; background: transparent;
+}
+.stTabs [aria-selected="true"] {
+    color: #0f172a !important; border-bottom: 2px solid #0f172a !important; background: transparent !important;
+}
+
+/* Hero */
+.hero { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid #f1f5f9; margin-bottom: 2rem; }
+.hero-eyebrow {
+    font-family: 'DM Mono', monospace; font-size: 0.68rem; font-weight: 500;
+    letter-spacing: 0.18em; text-transform: uppercase; color: #2563eb; margin-bottom: 0.75rem;
+}
+.hero-title {
+    font-size: 2.75rem; font-weight: 600; color: #0f172a;
+    letter-spacing: -0.025em; line-height: 1.08; margin-bottom: 1rem;
+}
+.hero-sub {
+    font-size: 0.95rem; color: #64748b; font-weight: 300;
+    max-width: 580px; line-height: 1.7;
+}
+
+/* Metric strip */
+.metric-strip {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 1px; background: #e2e8f0; border: 1px solid #e2e8f0;
+    border-radius: 8px; overflow: hidden; margin-bottom: 2.5rem;
+}
+.metric-cell { background: #fafafa; padding: 1.25rem 1.5rem; }
+.metric-value {
+    font-family: 'DM Mono', monospace; font-size: 1.9rem;
+    font-weight: 400; color: #0f172a; line-height: 1; letter-spacing: -0.02em;
+}
+.metric-label {
+    font-size: 0.67rem; font-weight: 500; letter-spacing: 0.1em;
+    text-transform: uppercase; color: #94a3b8; margin-top: 0.3rem;
+}
+
+/* Feature cards */
+.card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: #e2e8f0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; margin-bottom: 2rem; }
+.card { background: #ffffff; padding: 1.5rem; }
+.card-tab { font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: #2563eb; margin-bottom: 0.5rem; }
+.card-title { font-size: 0.95rem; font-weight: 600; color: #0f172a; margin-bottom: 0.5rem; }
+.card-body { font-size: 0.82rem; color: #64748b; line-height: 1.6; }
+.card-pills { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.card-pill { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #475569; background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 3px; padding: 0.25rem 0.5rem; }
+
+/* Stack grid */
+.stack-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-top: 0.75rem; margin-bottom: 2rem; }
+.stack-item { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 6px; padding: 0.75rem 0.9rem; }
+.stack-layer { font-family: 'DM Mono', monospace; font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase; color: #94a3b8; margin-bottom: 0.2rem; }
+.stack-tech { font-size: 0.82rem; font-weight: 500; color: #0f172a; }
+
+/* Section header */
+.section-header {
+    font-family: 'DM Mono', monospace; font-size: 0.67rem; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #94a3b8;
+    padding-bottom: 0.6rem; border-bottom: 1px solid #f1f5f9;
+    margin-bottom: 1.25rem; margin-top: 1.75rem;
+}
+
+/* Dataframe mono font */
+.stDataFrame { font-family: 'DM Mono', monospace !important; }
+
+/* Sidebar */
+section[data-testid="stSidebar"] { font-family: 'DM Mono', monospace; font-size: 0.8rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+
+tab_overview, tab_chat, tab_events = st.tabs([
+    "01 · Overview",
+    "02 · AI Analytics",
+    "03 · Event Study",
+])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — OVERVIEW
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_overview:
+
+    st.markdown("""
+    <div class="hero">
+        <div class="hero-eyebrow">Portfolio Project · Data Engineering</div>
+        <div class="hero-title">Equity Analytics Pipeline</div>
+        <div class="hero-sub">
+            A production-style ELT pipeline covering the full S&amp;P 500 universe,
+            95 Federal Reserve macro indicators, and complete fundamental financial data —
+            modeled into a Kimball dimensional warehouse and exposed through a
+            natural language analytics interface powered by Claude.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Live stats
+    with st.spinner(""):
+        stats = load_summary_stats()
+
+    if stats:
+        equity_count = int(stats.get("equity_count", 0))
+        macro_count  = int(stats.get("macro_series_count", 0))
+        price_rows   = int(stats.get("price_rows", 0))
+        price_start  = str(stats.get("price_start", ""))[:4]
+        price_end    = str(stats.get("price_end", ""))[:4]
+
+        st.markdown(f"""
+        <div class="metric-strip">
+            <div class="metric-cell">
+                <div class="metric-value">{equity_count:,}</div>
+                <div class="metric-label">Securities</div>
+            </div>
+            <div class="metric-cell">
+                <div class="metric-value">{macro_count}</div>
+                <div class="metric-label">FRED series</div>
+            </div>
+            <div class="metric-cell">
+                <div class="metric-value">{price_rows/1_000_000:.1f}M</div>
+                <div class="metric-label">Price observations</div>
+            </div>
+            <div class="metric-cell">
+                <div class="metric-value">{price_start}–{price_end}</div>
+                <div class="metric-label">History</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Feature cards
+    st.markdown("""
+    <div class="card-grid">
+        <div class="card">
+            <div class="card-tab">Tab 02</div>
+            <div class="card-title">AI Analytics Chat</div>
+            <div class="card-body">
+                Ask questions in plain English. Claude translates your prompt into
+                Snowflake SQL, executes it against the mart layer, and renders
+                an interactive chart — no SQL required.
+            </div>
+            <div class="card-pills">
+                <div class="card-pill">"Compare cumulative returns for SPY, QQQ, IWM"</div>
+                <div class="card-pill">"Show AAPL revenue over 4 years"</div>
+                <div class="card-pill">"Which stocks have the highest FCF yield?"</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-tab">Tab 03</div>
+            <div class="card-title">Event Study</div>
+            <div class="card-body">
+                Define a market condition and measure forward returns across all
+                historical occurrences. Returns a fan chart with median, IQR,
+                and 10th–90th percentile bands out to 63 trading days.
+            </div>
+            <div class="card-pills">
+                <div class="card-pill">"SPY daily return ≥ 3%"</div>
+                <div class="card-pill">"AAPL within 2% of 52-week high"</div>
+                <div class="card-pill">"QQQ daily return ≤ -5%"</div>
+            </div>
+        </div>
+        <div class="card">
+            <div class="card-tab">Below</div>
+            <div class="card-title">Data Explorer</div>
+            <div class="card-body">
+                Search the full universe of securities and macro indicators.
+                Filter by sector, market cap, or FRED category to discover
+                what's available before writing a prompt.
+            </div>
+            <div class="card-pills">
+                <div class="card-pill">S&amp;P 500 + top 100 ETFs by AUM</div>
+                <div class="card-pill">95 FRED series across 11 categories</div>
+                <div class="card-pill">Income stmt · Balance sheet · Cash flow</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Stack
+    st.markdown('<div class="section-header">Stack</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="stack-grid">
+        <div class="stack-item"><div class="stack-layer">Ingestion</div><div class="stack-tech">Python · yfinance · FRED API</div></div>
+        <div class="stack-item"><div class="stack-layer">Orchestration</div><div class="stack-tech">Prefect Cloud</div></div>
+        <div class="stack-item"><div class="stack-layer">Warehouse</div><div class="stack-tech">Snowflake</div></div>
+        <div class="stack-item"><div class="stack-layer">Transformation</div><div class="stack-tech">dbt Cloud · Kimball model</div></div>
+        <div class="stack-item"><div class="stack-layer">Quality</div><div class="stack-tech">54 dbt tests · CI gate</div></div>
+        <div class="stack-item"><div class="stack-layer">CI/CD</div><div class="stack-tech">GitHub Actions · RSA auth</div></div>
+        <div class="stack-item"><div class="stack-layer">AI</div><div class="stack-tech">Claude API · Anthropic</div></div>
+        <div class="stack-item"><div class="stack-layer">Application</div><div class="stack-tech">Streamlit · Plotly</div></div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Data Explorer ──────────────────────────────────────────────────────────
+
+    st.markdown('<div class="section-header">Data Explorer</div>', unsafe_allow_html=True)
+
+    FRED_CATEGORIES = {
+        "Interest Rates":        ["DFF","DGS1MO","DGS3MO","DGS6MO","DGS1","DGS2","DGS5","DGS7","DGS10","DGS30"],
+        "Yield Curve & Real":    ["T10Y2Y","T10Y3M","T5YIFR","DFII5","DFII10"],
+        "Inflation":             ["CPIAUCSL","CPILFESL","PCEPI","PCEPILFE","PPIACO","MICH","UMCSENT"],
+        "Labor Market":          ["UNRATE","U6RATE","PAYEMS","CIVPART","JTSJOL","JTSHIL","ICSA","CCSA","AWHMAN","CES0500000003"],
+        "GDP & Growth":          ["GDP","GDPC1","GDPCA","INDPRO","TCU","IPB50001N","DGORDER","NEWORDER","ISRATIO","MNFCTRIRSA"],
+        "Consumer":              ["RETAILSMNSA","RSXFS","PCE","DSPIC96","PSAVERT","TOTALSL"],
+        "Credit & Financial":    ["BAMLH0A0HYM2","BAMLC0A0CM","DAAA","DBAA","TEDRATE","DRCCLACBS","BUSLOANS","DPSACBW027SBOG"],
+        "Housing":               ["MORTGAGE30US","MORTGAGE15US","HOUST","HOUST1F","PERMIT","HSN1F","EXHOSLUSM495S","MSACSR","CSUSHPISA","MSPUS","EVACANTUSQ176N","RRVRUSQ156N"],
+        "Money Supply":          ["M1SL","M2SL","BOGMBASE","AMBSL","WRMFSL"],
+        "Trade & FX":            ["BOPTEXP","BOPTIMP","XTEXVA01USM667S","DEXUSEU","DEXJPUS","DEXUSUK","DEXCHUS","DEXCAUS","DEXBZUS","DEXKOUS","DEXINUS","DEXMXUS"],
+        "Energy & Commodities":  ["DCOILWTICO","DCOILBRENTEU","GASREGCOVW","DHHNGSP","APU000072610"],
+        "Market Indicators":     ["VIXCLS","SP500","NASDAQCOM","DJIA","WILL5000PR","NIKKEI225"],
+    }
+    series_to_cat = {s: cat for cat, series in FRED_CATEGORIES.items() for s in series}
+
+    ex_eq, ex_macro = st.tabs(["Equities & ETFs", "Macro Indicators"])
+
+    # ── Equities explorer ──────────────────────────────────────────────────────
+    with ex_eq:
+        with st.spinner(""):
+            sec_df = load_securities()
+
+        if not sec_df.empty:
+            c1, c2, c3 = st.columns([3, 2, 2])
+            with c1:
+                search = st.text_input("", placeholder="Search ticker, company, sector, industry…",
+                                       key="eq_search", label_visibility="collapsed")
+            with c2:
+                sectors = ["All sectors"] + sorted(sec_df["sector"].dropna().unique().tolist())
+                sel_sector = st.selectbox("", sectors, key="eq_sector", label_visibility="collapsed")
+            with c3:
+                cap_opts = ["All sizes", "Mega (>$200B)", "Large ($10–200B)", "Mid ($2–10B)", "Small (<$2B)", "ETFs / N/A"]
+                sel_cap = st.selectbox("", cap_opts, key="eq_cap", label_visibility="collapsed")
+
+            filt = sec_df.copy()
+            if search:
+                m = (filt["ticker"].str.contains(search.upper(), na=False) |
+                     filt["company_name"].str.contains(search, case=False, na=False) |
+                     filt["sector"].str.contains(search, case=False, na=False) |
+                     filt["industry"].str.contains(search, case=False, na=False))
+                filt = filt[m]
+            if sel_sector != "All sectors":
+                filt = filt[filt["sector"] == sel_sector]
+            if sel_cap == "Mega (>$200B)":
+                filt = filt[filt["market_cap_usd"] >= 200e9]
+            elif sel_cap == "Large ($10–200B)":
+                filt = filt[(filt["market_cap_usd"] >= 10e9) & (filt["market_cap_usd"] < 200e9)]
+            elif sel_cap == "Mid ($2–10B)":
+                filt = filt[(filt["market_cap_usd"] >= 2e9) & (filt["market_cap_usd"] < 10e9)]
+            elif sel_cap == "Small (<$2B)":
+                filt = filt[filt["market_cap_usd"] < 2e9]
+            elif sel_cap == "ETFs / N/A":
+                filt = filt[filt["market_cap_usd"].isna()]
+
+            disp = filt.copy()
+            disp["market_cap_usd"] = disp["market_cap_usd"].apply(
+                lambda x: f"${x/1e9:.1f}B" if pd.notna(x) else "—")
+            disp["first_trading_date"] = pd.to_datetime(disp["first_trading_date"]).dt.strftime("%Y-%m-%d")
+            disp["last_trading_date"]  = pd.to_datetime(disp["last_trading_date"]).dt.strftime("%Y-%m-%d")
+            disp.columns = ["Ticker", "Company", "Sector", "Industry", "Mkt Cap", "First", "Last"]
+
+            st.caption(f"{len(filt):,} of {len(sec_df):,} securities")
+            st.dataframe(disp, use_container_width=True, hide_index=True, height=400,
+                column_config={
+                    "Ticker":  st.column_config.TextColumn(width="small"),
+                    "Mkt Cap": st.column_config.TextColumn(width="small"),
+                    "First":   st.column_config.TextColumn(width="small"),
+                    "Last":    st.column_config.TextColumn(width="small"),
+                })
+
+            sector_counts = (sec_df[sec_df["sector"].notna()]
+                             .groupby("sector").size().reset_index(name="n")
+                             .sort_values("n", ascending=True))
+            fig_s = px.bar(sector_counts, x="n", y="sector", orientation="h",
+                           title="Securities by Sector", template="plotly_white",
+                           color_discrete_sequence=["#2563eb"])
+            fig_s.update_layout(height=340, margin=dict(l=0,r=0,t=40,b=0),
+                                xaxis_title="", yaxis_title="", showlegend=False,
+                                font=dict(family="DM Mono, monospace", size=11),
+                                title_font=dict(size=12, color="#64748b"))
+            st.plotly_chart(fig_s, use_container_width=True)
+
+    # ── Macro explorer ─────────────────────────────────────────────────────────
+    with ex_macro:
+        with st.spinner(""):
+            macro_df = load_macro_series()
+
+        if not macro_df.empty:
+            macro_df["category"] = macro_df["series_id"].map(series_to_cat).fillna("Other")
+
+            mc1, mc2 = st.columns([3, 2])
+            with mc1:
+                msearch = st.text_input("", placeholder="Search series ID or name…",
+                                        key="macro_search", label_visibility="collapsed")
+            with mc2:
+                mcats = ["All categories"] + sorted(macro_df["category"].unique().tolist())
+                sel_cat = st.selectbox("", mcats, key="macro_cat", label_visibility="collapsed")
+
+            mfilt = macro_df.copy()
+            if msearch:
+                mm = (mfilt["series_id"].str.contains(msearch.upper(), na=False) |
+                      mfilt["series_name"].str.contains(msearch, case=False, na=False) |
+                      mfilt["category"].str.contains(msearch, case=False, na=False))
+                mfilt = mfilt[mm]
+            if sel_cat != "All categories":
+                mfilt = mfilt[mfilt["category"] == sel_cat]
+
+            mdisp = mfilt.copy()
+            mdisp["first_observation"] = pd.to_datetime(mdisp["first_observation"]).dt.strftime("%Y-%m-%d")
+            mdisp["last_observation"]  = pd.to_datetime(mdisp["last_observation"]).dt.strftime("%Y-%m-%d")
+            mdisp["observation_count"] = mdisp["observation_count"].apply(lambda x: f"{x:,}")
+            mdisp = mdisp[["series_id","series_name","category","first_observation","last_observation","observation_count"]]
+            mdisp.columns = ["Series ID","Name","Category","First Obs.","Last Obs.","Observations"]
+
+            st.caption(f"{len(mfilt):,} of {len(macro_df):,} series")
+            st.dataframe(mdisp, use_container_width=True, hide_index=True, height=400,
+                column_config={
+                    "Series ID":    st.column_config.TextColumn(width="small"),
+                    "Observations": st.column_config.TextColumn(width="small"),
+                })
+
+            cat_counts = (macro_df.groupby("category").size()
+                          .reset_index(name="n").sort_values("n", ascending=True))
+            fig_m = px.bar(cat_counts, x="n", y="category", orientation="h",
+                           title="Series by Category", template="plotly_white",
+                           color_discrete_sequence=["#2563eb"])
+            fig_m.update_layout(height=340, margin=dict(l=0,r=0,t=40,b=0),
+                                xaxis_title="", yaxis_title="", showlegend=False,
+                                font=dict(family="DM Mono, monospace", size=11),
+                                title_font=dict(size=12, color="#64748b"))
+            st.plotly_chart(fig_m, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — AI ANALYTICS CHAT
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_chat:
+
     with st.sidebar:
-        st.header("Example prompts")
+        st.markdown("**Example prompts**")
         examples = [
             "Compare cumulative returns for SPY, QQQ and IWM over the last year",
             "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
@@ -379,7 +610,6 @@ with tab1:
             "Show me tickers trading closest to their 52-week high",
             "How did SPY perform during periods when the yield curve was inverted?",
             "Compare SPY daily returns against the Fed funds rate over the last year",
-            "Show me the Fed funds rate trend over the last year",
             "Show me AAPL's revenue and net income trend over the last 4 years",
             "Which S&P 500 stocks have the lowest trailing PE ratio?",
             "Compare operating margins for AAPL, MSFT, GOOGL and META",
@@ -388,9 +618,9 @@ with tab1:
             "Compare debt-to-equity ratios across bank stocks",
             "Which stocks have the highest revenue growth?",
         ]
-        for example in examples:
-            if st.button(example, use_container_width=True):
-                st.session_state.pending_prompt = example
+        for ex in examples:
+            if st.button(ex, use_container_width=True, key=f"chat_ex_{ex[:30]}"):
+                st.session_state.pending_prompt = ex
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -410,8 +640,7 @@ with tab1:
             else:
                 st.write(msg["content"])
 
-    prompt = st.chat_input("Ask a question or request a chart...")
-
+    prompt = st.chat_input("Ask a question or request a chart…")
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
@@ -425,121 +654,79 @@ with tab1:
         with st.chat_message("assistant"):
             sql = None
             try:
-                with st.spinner("Generating SQL..."):
-                    claude_messages = [
-                        {"role": m["role"], "content": m["content"]}
-                        for m in st.session_state.messages
-                        if m["role"] == "user"
-                    ]
+                with st.spinner("Generating SQL…"):
+                    claude_messages = [{"role": m["role"], "content": m["content"]}
+                                       for m in st.session_state.messages if m["role"] == "user"]
                     sql = generate_sql(claude_messages)
-
-                with st.spinner("Querying Snowflake..."):
+                with st.spinner("Querying Snowflake…"):
                     df = execute_sql_cached(sql)
 
                 if df.empty:
                     st.write("The query returned no results. Try rephrasing your request.")
-                    logger.info("Query returned empty result set")
                     st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": "No results returned.",
-                        "text": "The query returned no results. Try rephrasing your request.",
-                        "sql": sql
+                        "role": "assistant", "content": "No results.",
+                        "text": "The query returned no results.", "sql": sql
                     })
                 else:
-                    with st.spinner("Building chart..."):
+                    with st.spinner("Building chart…"):
                         fig = generate_chart(df, prompt)
-
                     st.plotly_chart(fig, use_container_width=True)
-
                     with st.expander("Generated SQL"):
                         st.code(sql, language="sql")
-
                     st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": prompt,
-                        "chart": fig,
-                        "sql": sql
+                        "role": "assistant", "content": prompt, "chart": fig, "sql": sql
                     })
-
             except Exception as e:
-                logger.error("Error handling prompt '%s': %s", prompt[:100], e)
+                logger.error("Prompt error: %s", e)
                 st.error(f"Something went wrong: {str(e)}")
                 with st.expander("Generated SQL"):
-                    st.code(sql if sql else "SQL not generated", language="sql")
+                    st.code(sql or "SQL not generated", language="sql")
 
-with tab2:
-    st.header("Event Study")
-    st.caption("Find all historical occurrences of an event and measure forward returns")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 3 — EVENT STUDY
+# ══════════════════════════════════════════════════════════════════════════════
+
+with tab_events:
+
+    st.markdown("### Event Study")
+    st.caption("Define a market event condition and measure forward returns across all historical occurrences.")
 
     col1, col2, col3 = st.columns(3)
-
     with col1:
         ticker = st.text_input("Ticker", value="SPY").upper().strip()
-
     with col2:
-        condition = st.selectbox(
-            "Event condition",
-            [
-                "Daily return ≥ X%",
-                "Daily return ≤ -X%",
-                "Price within X% of 52-week high",
-                "Price within X% of 52-week low",
-                "Volume spike ≥ X× average"
-            ]
-        )
-
+        condition = st.selectbox("Event condition", [
+            "Daily return ≥ X%", "Daily return ≤ -X%",
+            "Price within X% of 52-week high", "Price within X% of 52-week low",
+            "Volume spike ≥ X× average"
+        ])
     with col3:
-        threshold = st.number_input(
-            "Threshold (X)",
-            min_value=0.1,
-            max_value=50.0,
-            value=3.0,
-            step=0.5
-        )
+        threshold = st.number_input("Threshold (X)", min_value=0.1, max_value=50.0, value=3.0, step=0.5)
 
-    run_study = st.button("Run Event Study", type="primary")
-
-    if run_study:
-        # Validate ticker — alphanumeric + hyphen only (e.g. BRK-B)
-        import re
+    if st.button("Run Event Study", type="primary"):
         if not re.match(r'^[A-Z0-9\-]{1,10}$', ticker):
             st.error("Invalid ticker. Use letters, numbers, and hyphens only (e.g. AAPL, BRK-B).")
             st.stop()
 
-        # threshold comes from st.number_input — already a float, no injection risk
-        # condition comes from st.selectbox — fixed set of strings
-        threshold_decimal = threshold / 100
+        td = threshold / 100
+        if condition == "Daily return ≥ X%":            where_clause = f"daily_return >= {td}"
+        elif condition == "Daily return ≤ -X%":         where_clause = f"daily_return <= -{td}"
+        elif condition == "Price within X% of 52-week high": where_clause = f"pct_of_52w_high >= {1 - td}"
+        elif condition == "Price within X% of 52-week low":  where_clause = f"close_price <= week_52_low * {1 + td}"
+        else:                                            where_clause = f"volume >= {threshold}"
 
-        if condition == "Daily return ≥ X%":
-            where_clause = f"daily_return >= {threshold_decimal}"
-        elif condition == "Daily return ≤ -X%":
-            where_clause = f"daily_return <= -{threshold_decimal}"
-        elif condition == "Price within X% of 52-week high":
-            where_clause = f"pct_of_52w_high >= {1 - threshold_decimal}"
-        elif condition == "Price within X% of 52-week low":
-            where_clause = f"close_price <= week_52_low * {1 + threshold_decimal}"
-        else:
-            where_clause = f"volume >= {threshold}"
-
-        # ticker is validated above; safe to interpolate
         event_sql = f"""
         WITH events AS (
-            SELECT
-                ticker,
-                price_date AS event_date,
-                daily_return AS event_return,
-                close_price AS event_close
+            SELECT ticker, price_date AS event_date,
+                   daily_return AS event_return, close_price AS event_close
             FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES
-            WHERE ticker = '{ticker}'
-              AND {where_clause}
+            WHERE ticker = '{ticker}' AND {where_clause}
         ),
         forward_returns AS (
-            SELECT
-                e.event_date,
-                e.event_return,
-                f.price_date AS forward_date,
-                DATEDIFF(day, e.event_date, f.price_date) AS days_forward,
-                (f.close_price - e.event_close) / e.event_close AS cum_return
+            SELECT e.event_date, e.event_return,
+                   DATEDIFF(day, e.event_date, f.price_date) AS days_forward,
+                   (f.close_price - e.event_close) / e.event_close AS cum_return
             FROM events e
             JOIN EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES f
                 ON f.ticker = e.ticker
@@ -547,53 +734,43 @@ with tab2:
                 AND f.price_date <= DATEADD(day, 63, e.event_date)
         ),
         pivoted AS (
-            SELECT
-                event_date,
-                ROUND(event_return * 100, 2) AS event_return_pct,
-                MAX(CASE WHEN days_forward = 1  THEN cum_return END) AS d1,
-                MAX(CASE WHEN days_forward = 2  THEN cum_return END) AS d2,
-                MAX(CASE WHEN days_forward = 3  THEN cum_return END) AS d3,
-                MAX(CASE WHEN days_forward = 5  THEN cum_return END) AS d5,
-                MAX(CASE WHEN days_forward = 10 THEN cum_return END) AS d10,
-                MAX(CASE WHEN days_forward = 21 THEN cum_return END) AS d21,
-                MAX(CASE WHEN days_forward = 42 THEN cum_return END) AS d42,
-                MAX(CASE WHEN days_forward = 63 THEN cum_return END) AS d63
-            FROM forward_returns
-            GROUP BY event_date, event_return
+            SELECT event_date, ROUND(event_return * 100, 2) AS event_return_pct,
+                   MAX(CASE WHEN days_forward = 1  THEN cum_return END) AS d1,
+                   MAX(CASE WHEN days_forward = 2  THEN cum_return END) AS d2,
+                   MAX(CASE WHEN days_forward = 3  THEN cum_return END) AS d3,
+                   MAX(CASE WHEN days_forward = 5  THEN cum_return END) AS d5,
+                   MAX(CASE WHEN days_forward = 10 THEN cum_return END) AS d10,
+                   MAX(CASE WHEN days_forward = 21 THEN cum_return END) AS d21,
+                   MAX(CASE WHEN days_forward = 42 THEN cum_return END) AS d42,
+                   MAX(CASE WHEN days_forward = 63 THEN cum_return END) AS d63
+            FROM forward_returns GROUP BY event_date, event_return
         )
-        SELECT * FROM pivoted
-        ORDER BY event_date DESC
+        SELECT * FROM pivoted ORDER BY event_date DESC
         """
 
         logger.info("Event study: ticker=%s condition=%s threshold=%s", ticker, condition, threshold)
 
-        with st.spinner(f"Finding all {condition} events for {ticker}..."):
+        with st.spinner(f"Scanning history for {ticker}…"):
             try:
                 df = execute_sql_cached(event_sql)
-
                 if df.empty:
-                    st.warning(f"No events found for {ticker} with condition: {condition} {threshold}%")
+                    st.warning(f"No events found for {ticker} · {condition} · {threshold}%")
                 else:
-                    fwd_cols = ['d1', 'd2', 'd3', 'd5', 'd10', 'd21', 'd42', 'd63']
-                    labels = ['1D', '2D', '3D', '5D', '10D', '21D', '42D', '63D']
+                    fwd_cols = ['d1','d2','d3','d5','d10','d21','d42','d63']
+                    labels   = ['1D','2D','3D','5D','10D','21D','42D','63D']
 
-                    st.subheader(f"Summary — {len(df)} events found")
+                    st.markdown(f"**{len(df)} events** · {ticker} · {condition} · threshold {threshold}%")
 
-                    summary_data = {
-                        'Horizon': labels,
-                        'Avg Return %': [round(df[c].mean() * 100, 2) for c in fwd_cols],
-                        'Median Return %': [round(df[c].median() * 100, 2) for c in fwd_cols],
-                        '% Positive': [round((df[c] > 0).sum() * 100 / df[c].notna().sum(), 1) for c in fwd_cols],
-                        'Best %': [round(df[c].max() * 100, 2) for c in fwd_cols],
-                        'Worst %': [round(df[c].min() * 100, 2) for c in fwd_cols],
+                    summary = {
+                        'Horizon':      labels,
+                        'Avg %':        [round(df[c].mean() * 100, 2) for c in fwd_cols],
+                        'Median %':     [round(df[c].median() * 100, 2) for c in fwd_cols],
+                        '% Positive':   [round((df[c] > 0).sum() * 100 / df[c].notna().sum(), 1) for c in fwd_cols],
+                        'Best %':       [round(df[c].max() * 100, 2) for c in fwd_cols],
+                        'Worst %':      [round(df[c].min() * 100, 2) for c in fwd_cols],
                     }
-                    summary_df = pd.DataFrame(summary_data)
-                    st.dataframe(summary_df, hide_index=True, use_container_width=True)
+                    st.dataframe(pd.DataFrame(summary), hide_index=True, use_container_width=True)
 
-                    st.subheader("Return distribution over time")
-                    import plotly.graph_objects as go
-
-                    horizon_days = [1, 2, 3, 5, 10, 21, 42, 63]
                     medians = [df[c].median() * 100 for c in fwd_cols]
                     p25 = [df[c].quantile(0.25) * 100 for c in fwd_cols]
                     p75 = [df[c].quantile(0.75) * 100 for c in fwd_cols]
@@ -601,55 +778,36 @@ with tab2:
                     p90 = [df[c].quantile(0.90) * 100 for c in fwd_cols]
 
                     fig = go.Figure()
-
-                    fig.add_trace(go.Scatter(
-                        x=labels + labels[::-1],
-                        y=p90 + p10[::-1],
-                        fill='toself',
-                        fillcolor='rgba(99,110,250,0.1)',
-                        line=dict(color='rgba(255,255,255,0)'),
-                        name='10th-90th percentile'
-                    ))
-
-                    fig.add_trace(go.Scatter(
-                        x=labels + labels[::-1],
-                        y=p75 + p25[::-1],
-                        fill='toself',
-                        fillcolor='rgba(99,110,250,0.2)',
-                        line=dict(color='rgba(255,255,255,0)'),
-                        name='25th-75th percentile'
-                    ))
-
-                    fig.add_trace(go.Scatter(
-                        x=labels,
-                        y=medians,
-                        line=dict(color='rgb(99,110,250)', width=2),
-                        name='Median',
-                        mode='lines+markers'
-                    ))
-
-                    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
-
+                    fig.add_trace(go.Scatter(x=labels+labels[::-1], y=p90+p10[::-1],
+                        fill='toself', fillcolor='rgba(37,99,235,0.07)',
+                        line=dict(color='rgba(0,0,0,0)'), name='10th–90th pct'))
+                    fig.add_trace(go.Scatter(x=labels+labels[::-1], y=p75+p25[::-1],
+                        fill='toself', fillcolor='rgba(37,99,235,0.14)',
+                        line=dict(color='rgba(0,0,0,0)'), name='25th–75th pct'))
+                    fig.add_trace(go.Scatter(x=labels, y=medians,
+                        line=dict(color='#2563eb', width=2),
+                        name='Median', mode='lines+markers',
+                        marker=dict(size=5, color='#2563eb')))
+                    fig.add_hline(y=0, line_dash="dash", line_color="#cbd5e1", opacity=0.8)
                     fig.update_layout(
-                        title=f"{ticker} — Forward returns after {condition} {threshold}% ({len(df)} events)",
-                        xaxis_title="Trading horizon",
-                        yaxis_title="Cumulative return %",
-                        template="plotly_white",
-                        hovermode="x unified"
+                        title=f"{ticker} — forward returns after {condition} {threshold}% ({len(df)} events)",
+                        xaxis_title="Trading horizon", yaxis_title="Cumulative return %",
+                        template="plotly_white", hovermode="x unified",
+                        font=dict(family="DM Mono, monospace", size=11),
+                        title_font=dict(size=12, color="#64748b"),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                     )
-
                     st.plotly_chart(fig, use_container_width=True)
 
                     with st.expander(f"All {len(df)} event instances"):
-                        display_df = df.copy()
+                        ddisp = df.copy()
                         for c in fwd_cols:
-                            display_df[c] = (display_df[c] * 100).round(2)
-                        display_df.columns = ['Event Date', 'Event Return %'] + labels
-                        st.dataframe(display_df, hide_index=True, use_container_width=True)
-
+                            ddisp[c] = (ddisp[c] * 100).round(2)
+                        ddisp.columns = ['Event Date', 'Event Return %'] + labels
+                        st.dataframe(ddisp, hide_index=True, use_container_width=True)
                     with st.expander("SQL"):
                         st.code(event_sql, language="sql")
 
             except Exception as e:
-                logger.error("Event study error: ticker=%s error=%s", ticker, e)
+                logger.error("Event study error: %s", e)
                 st.error(f"Error running event study: {str(e)}")
