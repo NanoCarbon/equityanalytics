@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: stg_prices
+    description: "Cleaned and typed price data from yfinance RAW layer."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: price_date
+        tests:
+          - not_null
+      - name: close_price
+        tests:
+          - not_null
+      - name: volume
+        tests:
+          - not_null
+
+  - name: stg_companies
+    description: "Cleaned company metadata from yfinance RAW layer."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - unique
+      - name: sector
+        tests:
+          - not_null

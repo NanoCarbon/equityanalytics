@@ -16,6 +16,9 @@ models:
       - name: daily_return
         tests:
           - not_null
+      - name: volume
+        tests:
+          - not_null
 
   - name: dim_security
     description: "One row per unique security with company metadata."
@@ -24,6 +27,9 @@ models:
         tests:
           - not_null
           - unique
+      - name: sector
+        tests:
+          - not_null
 
   - name: dim_date
     description: "Calendar dimension spanning 2020 to present."
@@ -32,3 +38,9 @@ models:
         tests:
           - not_null
           - unique
+      - name: year
+        tests:
+          - not_null
+      - name: is_weekday
+        tests:
+          - not_null
