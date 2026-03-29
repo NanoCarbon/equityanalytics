@@ -42,6 +42,18 @@ DIM_DATE - grain: one row per calendar day
 - IS_WEEKDAY: boolean
 - FISCAL_QUARTER_LABEL: varchar
 
+EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS - grain: one row per series per observation date
+- SERIES_ID: varchar — indicator code e.g. 'DFF', 'CPIAUCSL', 'T10Y2Y', 'UNRATE'
+- SERIES_NAME: varchar — full name e.g. 'Fed Funds Rate', 'CPI Inflation'
+- OBSERVATION_DATE: date — date of the observation
+- VALUE: float — the indicator value
+
+Series reference:
+- DFF: Federal Funds Rate (daily, %)
+- CPIAUCSL: Consumer Price Index (monthly, index level)
+- T10Y2Y: 10yr minus 2yr Treasury spread (daily, %) — negative = inverted yield curve
+- UNRATE: Unemployment Rate (monthly, %)
+
 Available tickers: AAPL, MSFT, GOOGL, AMZN, META, JPM, GS, MS, BLK, BX, 
 BRK-B, V, MA, HD, UNH, SPY, QQQ, IWM, VTI, AGG
 
@@ -174,7 +186,10 @@ with st.sidebar:
         "Which sector had the highest average daily return last month?",
         "Show me the top 5 tickers by average volume",
         "Compare JPM and GS closing prices over the last 6 months",
-        "Show me tickers trading closest to their 52-week high"
+        "Show me tickers trading closest to their 52-week high",
+        "How did SPY perform during periods when the yield curve was inverted?",
+        "Compare SPY daily returns against the Fed funds rate over the last year",
+        "Show me the Fed funds rate trend over the last year"
     ]
     for example in examples:
         if st.button(example, use_container_width=True):
