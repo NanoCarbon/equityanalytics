@@ -2,6 +2,7 @@ import snowflake.connector
 import pandas as pd
 from snowflake.connector.pandas_tools import write_pandas
 import os
+from datetime import datetime, date
 
 
 def get_connection():
@@ -16,6 +17,26 @@ def get_connection():
     )
 
 
+def get_max_date(table_name: str) -> date | None:
+    """
+    Returns the most recent date already loaded into a table.
+    Returns None if the table is empty or doesn't exist.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT MAX(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
+            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+        """)
+        result = cursor.fetchone()[0]
+        return result
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def load_dataframe(df: pd.DataFrame, table_name: str, overwrite: bool = False) -> int:
     """
     Bulk load a DataFrame into Snowflake RAW schema.
@@ -23,7 +44,6 @@ def load_dataframe(df: pd.DataFrame, table_name: str, overwrite: bool = False) -
     """
     conn = get_connection()
 
-    # Snowflake convention: uppercase column names
     df.columns = [c.upper() for c in df.columns]
 
     success, num_chunks, num_rows, _ = write_pandas(
