@@ -18,3 +18,4 @@ renamed as (
 )
 
 select * from renamed
+--commenting out for now to test CI workflow
