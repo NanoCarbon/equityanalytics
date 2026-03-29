@@ -1,9 +1,15 @@
 import requests
 import pandas as pd
+import logging
 from datetime import datetime, timedelta
 from typing import List
 
+logger = logging.getLogger(__name__)
+
 FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
+
+# Timeout for FRED API calls (seconds)
+HTTP_TIMEOUT = 30
 
 FRED_SERIES = {
     # Interest rates
@@ -127,13 +133,18 @@ FRED_SERIES = {
     "NIKKEI225": "Nikkei 225",
 }
 
+
 def extract_fred_series(
     api_key: str,
     series_id: str,
     start_date: str | None = None,
     lookback_days: int = 365
 ) -> pd.DataFrame:
-    """Extract a single FRED series. Returns empty DataFrame if series not found."""
+    """
+    Extract a single FRED series.
+    Returns empty DataFrame if series not found or request fails.
+    Raises on unexpected errors so callers can decide whether to abort.
+    """
     if start_date is None:
         start_date = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
 
@@ -146,19 +157,19 @@ def extract_fred_series(
     }
 
     try:
-        response = requests.get(FRED_BASE_URL, params=params)
-        
+        response = requests.get(FRED_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
+
         if response.status_code == 400:
-            print(f"Skipping {series_id} — invalid series ID (400)")
+            logger.warning("Skipping %s — invalid series ID (400)", series_id)
             return pd.DataFrame()
-            
+
         response.raise_for_status()
-        
+
         data = response.json()
         observations = data.get("observations", [])
 
         if not observations:
-            print(f"No data returned for {series_id}")
+            logger.info("No data returned for %s", series_id)
             return pd.DataFrame()
 
         df = pd.DataFrame(observations)[["date", "value"]]
@@ -171,10 +182,14 @@ def extract_fred_series(
 
         return df[["series_id", "series_name", "date", "value", "extracted_at"]]
 
-    except Exception as e:
-        print(f"Warning: could not fetch {series_id}: {e}")
+    except requests.Timeout:
+        logger.warning("FRED request timed out for %s after %ds", series_id, HTTP_TIMEOUT)
         return pd.DataFrame()
-    
+    except Exception as e:
+        logger.warning("Could not fetch %s: %s", series_id, e)
+        return pd.DataFrame()
+
+
 def extract_all_fred_series(
     api_key: str,
     start_date: str | None = None,
@@ -182,11 +197,20 @@ def extract_all_fred_series(
 ) -> pd.DataFrame:
     """Extract all configured FRED series and combine into one DataFrame."""
     frames = []
+    skipped = 0
+
     for series_id in FRED_SERIES:
-        print(f"Fetching {series_id}...")
+        logger.info("Fetching %s...", series_id)
         df = extract_fred_series(api_key, series_id, start_date, lookback_days)
         if not df.empty:
             frames.append(df)
+        else:
+            skipped += 1
+
+    logger.info(
+        "FRED extraction complete: %d series fetched, %d skipped/empty",
+        len(frames), skipped
+    )
 
     if not frames:
         return pd.DataFrame()

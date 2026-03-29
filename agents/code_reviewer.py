@@ -1,9 +1,17 @@
 import os
+import logging
 import anthropic
 from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+logger = logging.getLogger(__name__)
 
 client = anthropic.Anthropic()
 
@@ -64,6 +72,14 @@ SKIP_PATHS = {
     'dbt_project.yml'
 }
 
+# Leave headroom below the model's context limit.
+# Each chunk is sent as a single user message; 80k chars is safe for claude-sonnet.
+MAX_CHUNK_CHARS = 80_000
+
+# Single files larger than this get their own chunk regardless of size.
+# Files exceeding this limit are truncated with a warning rather than dropped.
+MAX_SINGLE_FILE_CHARS = 60_000
+
 
 def collect_files(repo_root: str) -> dict:
     """Walk the repo and collect reviewable files."""
@@ -87,14 +103,23 @@ def collect_files(repo_root: str) -> dict:
         relative = str(path.relative_to(root))
         try:
             content = path.read_text(encoding='utf-8')
+
+            # Truncate very large individual files rather than silently dropping them
+            if len(content) > MAX_SINGLE_FILE_CHARS:
+                logger.warning(
+                    "%s is %d chars — truncating to %d for review",
+                    relative, len(content), MAX_SINGLE_FILE_CHARS
+                )
+                content = content[:MAX_SINGLE_FILE_CHARS] + "\n\n... [TRUNCATED — file exceeds review limit]"
+
             files[relative] = content
         except Exception as e:
-            print(f"Could not read {relative}: {e}")
+            logger.warning("Could not read %s: %s", relative, e)
 
     return files
 
 
-def chunk_files(files: dict, max_chars: int = 80000) -> list[dict]:
+def chunk_files(files: dict, max_chars: int = MAX_CHUNK_CHARS) -> list[dict]:
     """
     Split files into chunks to stay within API context limits.
     Groups smaller files together, keeps large files separate.
@@ -126,11 +151,17 @@ def review_chunk(files: dict, chunk_num: int, total_chunks: int) -> str:
     for filepath, code in files.items():
         content += f"=== {filepath} ===\n```\n{code}\n```\n\n"
 
+    logger.info(
+        "Sending batch %d/%d to Claude (%d files, ~%d chars)",
+        chunk_num, total_chunks, len(files), len(content)
+    )
+
     response = client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=4000,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}]
+        messages=[{"role": "user", "content": content}],
+        timeout=120,  # code review batches can be large — allow 2 minutes
     )
 
     return response.content[0].text
@@ -139,21 +170,20 @@ def review_chunk(files: dict, chunk_num: int, total_chunks: int) -> str:
 def main():
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    print("Collecting files for review...")
+    logger.info("Collecting files for review from %s", repo_root)
     files = collect_files(repo_root)
 
-    print(f"\nFound {len(files)} files to review:")
+    logger.info("Found %d files to review:", len(files))
     for f in sorted(files.keys()):
-        print(f"  {f}")
+        logger.info("  %s", f)
 
     chunks = chunk_files(files)
-    print(f"\nSplit into {len(chunks)} review batch(es)")
+    logger.info("Split into %d review batch(es)", len(chunks))
 
     all_reviews = []
 
     for i, chunk in enumerate(chunks, 1):
-        print(f"\nReviewing batch {i}/{len(chunks)}...")
-        print(f"  Files: {list(chunk.keys())}")
+        logger.info("Reviewing batch %d/%d: %s", i, len(chunks), list(chunk.keys()))
         review = review_chunk(chunk, i, len(chunks))
         all_reviews.append(f"# Batch {i} Review\n\n{review}")
 
@@ -166,8 +196,8 @@ def main():
         f.write("---\n\n")
         f.write(full_review)
 
-    print(f"\nReview saved to {output_path}")
-    print("\n" + "="*60)
+    logger.info("Review saved to %s", output_path)
+    print("\n" + "=" * 60)
     print(full_review)
 
 
