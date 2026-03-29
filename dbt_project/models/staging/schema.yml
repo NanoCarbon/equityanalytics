@@ -40,3 +40,39 @@ models:
       - name: value
         tests:
           - not_null
+
+  - name: stg_financial_statements
+    description: "Cleaned financial statement data in EAV format. One row per ticker/statement/frequency/period/line_item."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: statement_type
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['income_statement', 'balance_sheet', 'cash_flow']
+      - name: frequency
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['annual', 'quarterly']
+      - name: period_end_date
+        tests:
+          - not_null
+      - name: line_item
+        tests:
+          - not_null
+      - name: value
+        tests:
+          - not_null
+
+  - name: stg_valuation_metrics
+    description: "Cleaned point-in-time valuation ratios. One row per ticker per snapshot date."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: snapshot_date
+        tests:
+          - not_null
