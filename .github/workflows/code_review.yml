@@ -4,6 +4,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  pull-requests: write
+  issues: write
+
 jobs:
   code-review:
     runs-on: ubuntu-latest
@@ -32,7 +36,7 @@ jobs:
             const fs = require('fs');
             const review = fs.readFileSync('code_review.md', 'utf8');
             const truncated = review.length > 65000 
-              ? review.substring(0, 65000) + '\n\n... (truncated, see full review in artifacts)'
+              ? review.substring(0, 65000) + '\n\n... (truncated)'
               : review;
             github.rest.issues.createComment({
               issue_number: context.issue.number,
