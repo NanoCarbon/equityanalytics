@@ -1,0 +1,46 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install anthropic python-dotenv
+
+      - name: Run code review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python agents/code_reviewer.py
+
+      - name: Post review as PR comment
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const review = fs.readFileSync('code_review.md', 'utf8');
+            const truncated = review.length > 65000
+              ? review.substring(0, 65000) + '\n\n... (truncated)'
+              : review;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: truncated
+            });

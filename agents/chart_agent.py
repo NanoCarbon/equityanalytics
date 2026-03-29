@@ -253,58 +253,57 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&display=swap');
 
 /*
-  Palette — warm parchment
-  --bg:          #faf7f2   page background, linen
-  --bg-card:     #fdf9f4   card surfaces, slightly lighter
-  --bg-inset:    #f3ede4   inset/stack items, warm taupe
-  --border:      #e8ddd0   borders, warm not cold
-  --border-soft: #efe8de   softer dividers
-  --ink:         #2c2416   near-black with warm undertone
-  --ink-mid:     #6b5e4e   mid-tone text
-  --ink-muted:   #a0917f   muted labels
-  --accent:      #1d4ed8   blue, unchanged — provides contrast on warm bg
+  Palette — warm parchment, single ink color
+  --bg:       #faf7f2   page background
+  --bg-card:  #fdf9f4   card / input surfaces
+  --bg-inset: #f3ede4   stack items, sidebar
+  --border:   #e8ddd0   all borders
+  --ink:      #1a1a1a   ALL text — single black, no warm mid-tones
+  --ink-muted #666666   secondary labels only (tab inactive, metric label)
+  --accent:   #1d4ed8   blue eyebrows and card tabs
 */
 
+/* ── Global reset ── */
 html, body, [class*="css"] {
     font-family: 'DM Sans', sans-serif;
     background-color: #faf7f2;
+    color: #1a1a1a;
 }
+.stApp { background-color: #faf7f2; color: #1a1a1a; }
 
-/* Streamlit's outermost app container */
-.stApp { background-color: #faf7f2; }
+/* Force Streamlit's own text elements to use black */
+p, span, div, label, h1, h2, h3, h4, h5, h6,
+.stMarkdown, .stText, .stCaption { color: #1a1a1a !important; }
 
 #MainMenu, footer, header { visibility: hidden; }
 .block-container { padding-top: 1.5rem; padding-bottom: 2rem; max-width: 1200px; }
 
-/* Tabs */
+/* ── Tabs ── */
 .stTabs [data-baseweb="tab-list"] {
     gap: 0; border-bottom: 1px solid #e8ddd0; background: transparent; margin-bottom: 1.5rem;
 }
 .stTabs [data-baseweb="tab"] {
     font-family: 'DM Mono', monospace; font-size: 0.72rem; font-weight: 500;
     letter-spacing: 0.1em; text-transform: uppercase; padding: 0.75rem 1.75rem;
-    color: #a0917f; border-bottom: 2px solid transparent; background: transparent;
+    color: #666666 !important; border-bottom: 2px solid transparent; background: transparent;
 }
 .stTabs [aria-selected="true"] {
-    color: #2c2416 !important; border-bottom: 2px solid #2c2416 !important; background: transparent !important;
+    color: #1a1a1a !important; border-bottom: 2px solid #1a1a1a !important; background: transparent !important;
 }
 
-/* Hero */
-.hero { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid #efe8de; margin-bottom: 2rem; }
+/* ── Hero ── */
+.hero { padding: 1.5rem 0 2rem 0; border-bottom: 1px solid #e8ddd0; margin-bottom: 2rem; }
 .hero-eyebrow {
     font-family: 'DM Mono', monospace; font-size: 0.68rem; font-weight: 500;
     letter-spacing: 0.18em; text-transform: uppercase; color: #1d4ed8; margin-bottom: 0.75rem;
 }
 .hero-title {
-    font-size: 2.75rem; font-weight: 600; color: #2c2416;
+    font-size: 2.75rem; font-weight: 600; color: #1a1a1a;
     letter-spacing: -0.025em; line-height: 1.08; margin-bottom: 1rem;
 }
-.hero-sub {
-    font-size: 0.95rem; color: #6b5e4e; font-weight: 300;
-    max-width: 580px; line-height: 1.7;
-}
+.hero-sub { font-size: 0.95rem; color: #1a1a1a; font-weight: 300; max-width: 580px; line-height: 1.7; }
 
-/* Metric strip */
+/* ── Metric strip ── */
 .metric-strip {
     display: grid; grid-template-columns: repeat(4, 1fr);
     gap: 1px; background: #e8ddd0; border: 1px solid #e8ddd0;
@@ -313,14 +312,14 @@ html, body, [class*="css"] {
 .metric-cell { background: #fdf9f4; padding: 1.25rem 1.5rem; }
 .metric-value {
     font-family: 'DM Mono', monospace; font-size: 1.9rem;
-    font-weight: 400; color: #2c2416; line-height: 1; letter-spacing: -0.02em;
+    font-weight: 400; color: #1a1a1a; line-height: 1; letter-spacing: -0.02em;
 }
 .metric-label {
     font-size: 0.67rem; font-weight: 500; letter-spacing: 0.1em;
-    text-transform: uppercase; color: #a0917f; margin-top: 0.3rem;
+    text-transform: uppercase; color: #666666; margin-top: 0.3rem;
 }
 
-/* Feature cards */
+/* ── Feature cards ── */
 .card-grid {
     display: grid; grid-template-columns: repeat(3, 1fr);
     gap: 1px; background: #e8ddd0; border: 1px solid #e8ddd0;
@@ -331,74 +330,191 @@ html, body, [class*="css"] {
     font-family: 'DM Mono', monospace; font-size: 0.62rem; font-weight: 500;
     letter-spacing: 0.14em; text-transform: uppercase; color: #1d4ed8; margin-bottom: 0.5rem;
 }
-.card-title { font-size: 0.95rem; font-weight: 600; color: #2c2416; margin-bottom: 0.5rem; }
-.card-body { font-size: 0.82rem; color: #6b5e4e; line-height: 1.6; }
+.card-title { font-size: 0.95rem; font-weight: 600; color: #1a1a1a; margin-bottom: 0.5rem; }
+.card-body { font-size: 0.82rem; color: #1a1a1a; line-height: 1.6; }
 .card-pills { margin-top: 0.85rem; display: flex; flex-direction: column; gap: 0.3rem; }
 .card-pill {
-    font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #6b5e4e;
-    background: #f3ede4; border: 1px solid #e8ddd0;
-    border-radius: 3px; padding: 0.25rem 0.5rem;
+    font-family: 'DM Mono', monospace; font-size: 0.68rem; color: #1a1a1a;
+    background: #f3ede4; border: 1px solid #e8ddd0; border-radius: 3px; padding: 0.25rem 0.5rem;
 }
 
-/* Stack grid */
-.stack-grid {
-    display: grid; grid-template-columns: repeat(4, 1fr);
-    gap: 0.6rem; margin-top: 0.75rem; margin-bottom: 2rem;
-}
-.stack-item {
-    background: #f3ede4; border: 1px solid #e8ddd0;
-    border-radius: 6px; padding: 0.75rem 0.9rem;
-}
+/* ── Stack grid ── */
+.stack-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.6rem; margin-top: 0.75rem; margin-bottom: 2rem; }
+.stack-item { background: #f3ede4; border: 1px solid #e8ddd0; border-radius: 6px; padding: 0.75rem 0.9rem; }
 .stack-layer {
     font-family: 'DM Mono', monospace; font-size: 0.6rem;
-    letter-spacing: 0.1em; text-transform: uppercase; color: #a0917f; margin-bottom: 0.2rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #666666; margin-bottom: 0.2rem;
 }
-.stack-tech { font-size: 0.82rem; font-weight: 500; color: #2c2416; }
+.stack-tech { font-size: 0.82rem; font-weight: 500; color: #1a1a1a; }
 
-/* Section header */
+/* ── Section header ── */
 .section-header {
     font-family: 'DM Mono', monospace; font-size: 0.67rem; font-weight: 500;
-    letter-spacing: 0.14em; text-transform: uppercase; color: #a0917f;
+    letter-spacing: 0.14em; text-transform: uppercase; color: #666666;
     padding-bottom: 0.6rem; border-bottom: 1px solid #e8ddd0;
     margin-bottom: 1.25rem; margin-top: 1.75rem;
 }
 
-/* Dataframe — warm background */
+/* ── Dataframe ── */
 .stDataFrame { font-family: 'DM Mono', monospace !important; }
 [data-testid="stDataFrame"] > div { background-color: #fdf9f4 !important; }
 
-/* Sidebar */
+/* ── All input fields — white bg, black text ── */
+.stTextInput input,
+.stTextInput input:focus,
+.stTextInput input::placeholder {
+    background-color: #ffffff !important;
+    border-color: #e8ddd0 !important;
+    color: #1a1a1a !important;
+    font-family: 'DM Mono', monospace;
+}
+.stTextInput input::placeholder { color: #999999 !important; }
+
+/* Selectbox */
+.stSelectbox > div > div,
+.stSelectbox > div > div > div {
+    background-color: #ffffff !important;
+    border-color: #e8ddd0 !important;
+    color: #1a1a1a !important;
+}
+/* Selectbox selected value text */
+.stSelectbox [data-baseweb="select"] span,
+.stSelectbox [data-baseweb="select"] div { color: #1a1a1a !important; }
+
+/* Number input */
+.stNumberInput input {
+    background-color: #ffffff !important;
+    border-color: #e8ddd0 !important;
+    color: #1a1a1a !important;
+    font-family: 'DM Mono', monospace;
+}
+.stNumberInput > div { background-color: #ffffff !important; border-color: #e8ddd0 !important; }
+
+/* Chat input — remove dark shadow/container, clean border only */
+.stChatInput {
+    background-color: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+}
+.stChatInput > div {
+    background-color: #ffffff !important;
+    border: 1px solid #d4c9bc !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+}
+.stChatInput textarea {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+    box-shadow: none !important;
+}
+.stChatInput textarea::placeholder { color: #999999 !important; }
+
+/* Chat message avatars */
+[data-testid="stChatMessageAvatarUser"] {
+    background-color: #a8d5b5 !important;
+}
+[data-testid="stChatMessageAvatarAssistant"] {
+    background-color: #a8c4e0 !important;
+}
+
+/* ── Sidebar ── */
 section[data-testid="stSidebar"] {
     background-color: #f3ede4;
     font-family: 'DM Mono', monospace;
     font-size: 0.8rem;
+    color: #1a1a1a;
 }
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div { color: #1a1a1a !important; }
 section[data-testid="stSidebar"] .stButton button {
     background-color: #fdf9f4;
     border: 1px solid #e8ddd0;
-    color: #6b5e4e;
+    color: #1a1a1a !important;
+    text-align: left;
 }
 section[data-testid="stSidebar"] .stButton button:hover {
     background-color: #efe8de;
     border-color: #d4c4b0;
 }
 
-/* Input fields — warm tint */
-.stTextInput input {
+/* ── Expanders — keep warm background in all states ── */
+[data-testid="stExpander"] {
     background-color: #fdf9f4 !important;
-    border-color: #e8ddd0 !important;
-    color: #2c2416 !important;
-    font-family: 'DM Mono', monospace;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 6px !important;
 }
-.stSelectbox > div > div {
+[data-testid="stExpander"] summary,
+[data-testid="stExpander"] summary:hover,
+[data-testid="stExpander"] summary:focus,
+[data-testid="stExpander"] summary:active,
+[data-testid="stExpander"][open] summary {
     background-color: #fdf9f4 !important;
-    border-color: #e8ddd0 !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stExpander"] summary:hover {
+    background-color: #f0ece6 !important;
+}
+[data-testid="stExpander"] > div {
+    background-color: #fdf9f4 !important;
+}
+/* Expander header text and arrow */
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] summary svg {
+    color: #1a1a1a !important;
+    fill: #1a1a1a !important;
 }
 
-/* Chat input */
-.stChatInput textarea {
-    background-color: #fdf9f4 !important;
-    border-color: #e8ddd0 !important;
+/* ── Code blocks (SQL expander) — white background, dark text ── */
+/* Overrides dark syntax highlighting theme that clashes with warm bg */
+.stCode, [data-testid="stCode"] {
+    background-color: #ffffff !important;
+}
+.stCode pre, [data-testid="stCode"] pre {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 6px !important;
+}
+/* Syntax tokens — keep readable on white */
+.stCode code, [data-testid="stCode"] code,
+.stCode span, [data-testid="stCode"] span {
+    background-color: #ffffff !important;
+}
+
+/* ── Dataframe toolbar tooltips and hover overlays ── */
+/* The download button tooltip and column menu appear dark — force white */
+[data-testid="stDataFrameResizeHandle"],
+[data-testid="stDataFrame"] button,
+[data-testid="stDataFrame"] button svg,
+[data-testid="stDataFrame"] [role="tooltip"],
+[data-testid="stDataFrame"] [data-testid="stTooltipHoverTarget"] {
+    color: #1a1a1a !important;
+    background-color: #ffffff !important;
+}
+/* Toolbar icon buttons (download, fullscreen, search) */
+[data-testid="stDataFrame"] .dvn-scroller ~ div button,
+[data-testid="stElementToolbar"] {
+    background-color: #ffffff !important;
+    border: 1px solid #e8ddd0 !important;
+    border-radius: 4px !important;
+}
+[data-testid="stElementToolbar"] button {
+    background-color: #ffffff !important;
+    color: #1a1a1a !important;
+}
+[data-testid="stElementToolbar"] button:hover {
+    background-color: #f0ece6 !important;
+}
+[data-testid="stElementToolbar"] button svg path {
+    fill: #1a1a1a !important;
+    stroke: #1a1a1a !important;
+}
+/* Column header hover menu and sort arrows */
+[data-testid="stDataFrame"] th button {
+    background-color: transparent !important;
+    color: #1a1a1a !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -668,36 +784,51 @@ with tab_overview:
 # TAB 2 — AI ANALYTICS CHAT
 # ══════════════════════════════════════════════════════════════════════════════
 
+EXAMPLE_PROMPTS = [
+    "Compare cumulative returns for SPY, QQQ and IWM over the last year",
+    "How did SPY perform during periods when the yield curve was inverted?",
+    "Show me AAPL's revenue and net income trend over the last 4 years",
+    "Which S&P 500 stocks have the lowest trailing PE ratio?",
+    "Compare operating margins for AAPL, MSFT, GOOGL and META",
+]
+
 with tab_chat:
 
-    with st.sidebar:
-        st.markdown("**Example prompts**")
-        examples = [
-            "Compare cumulative returns for SPY, QQQ and IWM over the last year",
-            "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
-            "Which sector had the highest average daily return last month?",
-            "Show me the top 5 tickers by average volume",
-            "Compare JPM and GS closing prices over the last 6 months",
-            "Show me tickers trading closest to their 52-week high",
-            "How did SPY perform during periods when the yield curve was inverted?",
-            "Compare SPY daily returns against the Fed funds rate over the last year",
-            "Show me AAPL's revenue and net income trend over the last 4 years",
-            "Which S&P 500 stocks have the lowest trailing PE ratio?",
-            "Compare operating margins for AAPL, MSFT, GOOGL and META",
-            "Show me the top 10 stocks by free cash flow yield",
-            "How has JPM's return on equity changed over time?",
-            "Compare debt-to-equity ratios across bank stocks",
-            "Which stocks have the highest revenue growth?",
-        ]
-        for ex in examples:
-            if st.button(ex, use_container_width=True, key=f"chat_ex_{ex[:30]}"):
-                st.session_state.pending_prompt = ex
+    # Force suggestion buttons to look like light chips regardless of OS theme
+    st.markdown("""
+    <style>
+    div[data-testid="stHorizontalBlock"] .stButton button {
+        background-color: #f0ece6 !important;
+        color: #1a1a1a !important;
+        border: 1px solid #d4c9bc !important;
+        border-radius: 6px !important;
+        font-family: 'DM Mono', monospace !important;
+        font-size: 0.75rem !important;
+        font-weight: 400 !important;
+        padding: 0.5rem 0.75rem !important;
+        white-space: normal !important;
+        text-align: left !important;
+        line-height: 1.4 !important;
+        transition: background-color 0.15s, border-color 0.15s !important;
+        min-height: 3rem !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton button:hover {
+        background-color: #ddd6cc !important;
+        border-color: #b8ada0 !important;
+        color: #1a1a1a !important;
+    }
+    div[data-testid="stHorizontalBlock"] .stButton button:active {
+        background-color: #ccc4ba !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
     if "pending_prompt" not in st.session_state:
         st.session_state.pending_prompt = None
 
+    # ── Chat history ───────────────────────────────────────────────────────────
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             if msg["role"] == "assistant":
@@ -711,7 +842,19 @@ with tab_chat:
             else:
                 st.write(msg["content"])
 
-    prompt = st.chat_input("Ask a question or request a chart…")
+    # ── Prompt suggestions (shown only when no conversation yet) ──────────────
+    if not st.session_state.messages:
+        st.markdown("**Ask a question or choose a prompt:**")
+        st.write("")
+        cols = st.columns(len(EXAMPLE_PROMPTS))
+        for col, p in zip(cols, EXAMPLE_PROMPTS):
+            with col:
+                if st.button(p, key=f"suggestion_{p[:40]}", use_container_width=True):
+                    st.session_state.pending_prompt = p
+                    st.rerun()
+
+    # ── Chat input ─────────────────────────────────────────────────────────────
+    prompt = st.chat_input("Type here...")
     if st.session_state.pending_prompt:
         prompt = st.session_state.pending_prompt
         st.session_state.pending_prompt = None
