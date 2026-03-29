@@ -16,4 +16,3 @@ renamed as (
 )
 
 select * from renamed
-6a
