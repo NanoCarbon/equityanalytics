@@ -1,0 +1,52 @@
+name: dbt CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dbt_project/**'
+      - 'dbt_project.yml'
+
+jobs:
+  dbt-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dbt
+        run: pip install dbt-snowflake
+
+      - name: Configure dbt profile
+        run: |
+          mkdir -p ~/.dbt
+          cat > ~/.dbt/profiles.yml << EOF
+          equity_analytics:
+            target: ci
+            outputs:
+              ci:
+                type: snowflake
+                account: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+                user: ${{ secrets.SNOWFLAKE_USER }}
+                private_key_path: /tmp/snowflake_key.p8
+                role: ACCOUNTADMIN
+                database: EQUITY_ANALYTICS
+                warehouse: TRANSFORM_WH
+                schema: CI_${{ github.event.pull_request.number }}
+                threads: 4
+          EOF
+
+      - name: Write private key
+        run: |
+          echo "${{ secrets.SNOWFLAKE_PRIVATE_KEY }}" > /tmp/snowflake_key.p8
+
+      - name: Run dbt build
+        run: |
+          dbt deps --profiles-dir ~/.dbt
+          dbt build --profiles-dir ~/.dbt --target ci
