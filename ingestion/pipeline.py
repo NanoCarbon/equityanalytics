@@ -39,7 +39,6 @@ def task_load_prices(df: pd.DataFrame) -> int:
         logger.info("No new prices to load — skipping")
         return 0
     from ingestion.load import load_dataframe
-    # overwrite=False means APPEND not replace
     rows = load_dataframe(df, "PRICES", overwrite=False)
     logger.info(f"Appended {rows} rows to RAW.PRICES")
     return rows
@@ -48,22 +47,58 @@ def task_load_prices(df: pd.DataFrame) -> int:
 @task(name="load-company-info", retries=2)
 def task_load_company_info(df: pd.DataFrame) -> int:
     from ingestion.load import load_dataframe
-    # Company info always overwrites — metadata changes infrequently
     return load_dataframe(df, "COMPANY_INFO", overwrite=True)
+
+
+@task(
+    name="extract-fred-data",
+    retries=3,
+    retry_delay_seconds=30,
+    description="Pull macro indicator data from FRED API"
+)
+def task_extract_fred(lookback_days: int = 365) -> pd.DataFrame:
+    logger = get_run_logger()
+    import os
+    from ingestion.extract_fred import extract_all_fred_series
+    api_key = os.environ["FRED_API_KEY"]
+    df = extract_all_fred_series(api_key, lookback_days=lookback_days)
+    logger.info(f"Extracted {len(df)} FRED observations")
+    return df
+
+
+@task(
+    name="load-macro-indicators",
+    retries=2,
+    description="Load FRED macro data to Snowflake RAW.MACRO_INDICATORS"
+)
+def task_load_macro(df: pd.DataFrame) -> int:
+    logger = get_run_logger()
+    if df.empty:
+        logger.info("No macro data to load")
+        return 0
+    from ingestion.load import load_dataframe
+    rows = load_dataframe(df, "MACRO_INDICATORS", overwrite=True)
+    logger.info(f"Loaded {rows} rows to RAW.MACRO_INDICATORS")
+    return rows
 
 
 @flow(name="equity-ingestion-pipeline", log_prints=True)
 def equity_pipeline(lookback_days: int = 365):
-    # Check what's already loaded
     max_date = task_get_max_date()
-
-    # Extract only new data
     prices_df = task_extract_prices(max_date, lookback_days)
     company_df = task_extract_company_info()
-
-    # Load
     task_load_prices(prices_df)
     task_load_company_info(company_df)
+
+
+@flow(
+    name="macro-ingestion-pipeline",
+    description="Daily ELT: FRED API → Snowflake RAW macro indicators",
+    log_prints=True
+)
+def macro_pipeline(lookback_days: int = 365):
+    macro_df = task_extract_fred(lookback_days)
+    task_load_macro(macro_df)
 
 
 if __name__ == "__main__":

@@ -9,3 +9,5 @@ sources:
         description: "Raw daily OHLCV price data from yfinance"
       - name: company_info
         description: "Raw company metadata from yfinance"
+      - name: macro_indicators
+        description: "Raw macro economic indicators from FRED API"

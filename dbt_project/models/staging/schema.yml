@@ -27,3 +27,16 @@ models:
       - name: sector
         tests:
           - not_null
+
+  - name: stg_macro_indicators
+    description: "Cleaned macro indicator data from FRED API."
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+      - name: observation_date
+        tests:
+          - not_null
+      - name: value
+        tests:
+          - not_null
