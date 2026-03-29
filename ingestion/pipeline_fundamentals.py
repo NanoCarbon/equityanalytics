@@ -108,7 +108,7 @@ def task_load_valuations(df: pd.DataFrame, overwrite: bool = False) -> int:
 
 @flow(name="fundamentals-test-pipeline", log_prints=True)
 def fundamentals_test_pipeline(
-    tickers: list = None,
+    tickers: list = [],
     delay_seconds: float = 1.0,
 ):
     """
@@ -120,7 +120,7 @@ def fundamentals_test_pipeline(
     """
     logger = get_run_logger()
 
-    if tickers is None:
+    if not tickers:
         # Mix of large-cap, mid-cap, different sectors, and ETFs
         tickers = [
             "AAPL", "MSFT", "JPM", "JNJ", "XOM",  # mega-cap, diverse sectors

@@ -9,10 +9,10 @@ cleaned as (
         ticker,
         statement_type,
         frequency,
-        to_date(period_end_date)                          as period_end_date,
+        to_date(dateadd(second, period_end_date / 1000000000, '1970-01-01')) as period_end_date,
         line_item,
         cast(value as float)                              as value,
-        cast(extracted_at as timestamp_ntz)               as extracted_at
+        to_timestamp(extracted_at / 1000000000)           as extracted_at
 
     from source
     where value is not null
