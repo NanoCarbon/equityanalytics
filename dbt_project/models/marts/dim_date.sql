@@ -1,8 +1,8 @@
 {{ config(materialized='table', schema='marts') }}
 
 with date_spine as (
-    select dateadd(day, seq4(), '2010-01-01'::date) as date_day
-    from table(generator(rowcount => 6000))
+    select dateadd(day, seq4(), '2009-01-01'::date) as date_day
+    from table(generator(rowcount => 7000))
 )
 
 select
