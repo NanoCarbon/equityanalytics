@@ -32,7 +32,7 @@ models:
           - not_null
 
   - name: dim_date
-    description: "Calendar dimension spanning 2020 to present."
+    description: "Calendar dimension spanning 2009 to present."
     columns:
       - name: date_key
         tests:
@@ -42,5 +42,34 @@ models:
         tests:
           - not_null
       - name: is_weekday
+        tests:
+          - not_null
+
+  - name: fact_fundamentals
+    description: >
+      Pivoted financial statement data. Grain: ticker + period_end_date + frequency.
+      Contains income statement, balance sheet, and cash flow line items as columns.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: period_end_date
+        tests:
+          - not_null
+      - name: frequency
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['annual', 'quarterly']
+
+  - name: fact_valuation_snapshot
+    description: >
+      Point-in-time valuation ratios and metrics. Grain: ticker + snapshot_date.
+      Daily snapshots enable time-series analysis of PE, margins, etc.
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: snapshot_date
         tests:
           - not_null
