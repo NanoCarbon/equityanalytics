@@ -2,5 +2,9 @@ prefect
 yfinance
 pandas
 snowflake-connector-python
-"snowflake-connector-python[pandas]"
+snowflake-connector-python[pandas]
 anthropic
+streamlit
+plotly
+requests
+python-dotenv
