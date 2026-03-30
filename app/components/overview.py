@@ -1,7 +1,7 @@
 import streamlit as st
 import plotly.express as px
 import pandas as pd
-from streamlit.db.snowflake import load_summary_stats, load_securities, load_macro_series
+from db.snowflake import load_summary_stats, load_securities, load_macro_series
 from agents.prompts import FRED_CATEGORIES
 
 

@@ -1,6 +1,6 @@
 import logging
 import streamlit as st
-from streamlit.db.snowflake import execute_sql_cached
+from db.snowflake import execute_sql_cached
 from agents.chart_agent import generate_sql, generate_chart
 from agents.prompts import EXAMPLE_PROMPTS
 

@@ -3,7 +3,7 @@ import logging
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from streamlit.db.snowflake import execute_sql_cached
+from db.snowflake import execute_sql_cached
 
 logger = logging.getLogger(__name__)
 

@@ -7,18 +7,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Path setup ────────────────────────────────────────────────────────────────
-# streamlit_app.py lives in streamlit/ but agents/ is at the repo root.
-# Add the repo root to sys.path so `from agents.x import y` resolves correctly
-# whether running locally (streamlit run streamlit/streamlit_app.py) or on
-# Streamlit Community Cloud (main file path: streamlit/streamlit_app.py).
+# Add the repo root (parent of this file's directory) to sys.path so that
+# `from agents.x import y` resolves correctly. The folder containing this file
+# must NOT be named 'streamlit' — that shadows the installed streamlit package.
+# This folder is named 'app/' in the repo to avoid that conflict.
 
 repo_root = Path(__file__).parent.parent
-if str(repo_root) not in sys.path:
-    sys.path.insert(0, str(repo_root))
+app_root  = Path(__file__).parent
 
-from streamlit.components.overview import render_overview
-from streamlit.components.chat import render_chat
-from streamlit.components.event_study import render_event_study
+for p in [str(repo_root), str(app_root)]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from components.overview import render_overview
+from components.chat import render_chat
+from components.event_study import render_event_study
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
