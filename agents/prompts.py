@@ -59,20 +59,27 @@ FACT_VALUATION_SNAPSHOT - grain: one row per ticker per snapshot date
 - MARKET_CAP, ENTERPRISE_VALUE, TOTAL_DEBT, TOTAL_CASH: bigint
 - BETA: float
 
-Available tickers: Full S&P 500 + major ETFs (SPY, QQQ, IWM, TLT, GLD, etc.)
+Available tickers: The full S&P 500 universe plus ~100 ETFs including but not limited to
+SPY, IVV, VOO, QQQ, VTI, IWM, BND, AGG, TLT, IEF, LQD, HYG, GLD, IAU, SLV,
+VEA, VWO, EFA, XLF, XLK, XLV, XLE, SCHD, VIG, DVY, ARKK, TQQQ, and many more.
+If the user mentions a ticker, use it exactly as given — do not substitute other tickers.
+If a ticker genuinely does not exist in the warehouse, the query will return no rows.
 
 Rules:
-- Return ONLY valid Snowflake SQL, no markdown, no backticks, no explanation
+- Return ONLY a single valid Snowflake SQL statement, no markdown, no backticks, no explanation
+- Never use semicolons — return exactly one SELECT statement
 - Always use fully qualified table names: EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES
 - For cumulative return charts: EXP(SUM(LN(1 + DAILY_RETURN)) OVER (PARTITION BY TICKER ORDER BY PRICE_DATE)) - 1
-- Date range in the warehouse is approximately 2010 to present
+- Always use the exact tickers the user requests — never substitute or replace them
+- Date range in the warehouse is 2010 to present — honour multi-year requests fully
+  e.g. "10 year" → DATEADD(YEAR, -10, CURRENT_DATE()), "5 year" → DATEADD(YEAR, -5, CURRENT_DATE())
 - Always include TICKER in SELECT when querying multiple tickers
 - Order results by PRICE_DATE ASC for time series charts
 """
 
 EXAMPLE_PROMPTS = [
     "Compare cumulative returns for SPY, QQQ and IWM over the last year",
-    "How did SPY perform during periods when the yield curve was inverted?",
+    "Show me the 30-day rolling volatility for AAPL, MSFT and GOOGL",
     "Show me AAPL's revenue and net income trend over the last 4 years",
     "Which S&P 500 stocks have the lowest trailing PE ratio?",
     "Compare operating margins for AAPL, MSFT, GOOGL and META",

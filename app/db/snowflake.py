@@ -27,8 +27,28 @@ def get_snowflake_connection():
     )
 
 
+def _clean_sql(sql: str) -> str:
+    """
+    Strip trailing semicolons and whitespace.
+    If the LLM produced multiple semicolon-separated statements,
+    keep only the first — Snowflake connector rejects multiple statements.
+    """
+    sql = sql.strip()
+    # Strip trailing semicolon first
+    if sql.endswith(";"):
+        sql = sql[:-1].strip()
+    # If there are still semicolons, the LLM produced multiple statements.
+    # Take everything before the first one.
+    if ";" in sql:
+        first = sql[:sql.index(";")].strip()
+        logger.warning("LLM generated multiple statements — using only the first")
+        sql = first
+    return sql
+
+
 def _run_query(conn, sql: str) -> pd.DataFrame:
     """Execute SQL against an open connection and return a DataFrame."""
+    sql = _clean_sql(sql)
     start = time.monotonic()
     cursor = conn.cursor()
     cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 30")
@@ -73,7 +93,7 @@ def execute_sql(sql: str) -> pd.DataFrame:
         raise
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def execute_sql_cached(sql: str) -> pd.DataFrame:
     return execute_sql(sql)
 
