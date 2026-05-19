@@ -1,5 +1,3 @@
-{{ config(schema='staging') }}
-
 with statements as (
     select * from {{ ref('stg_financial_statements') }}
 ),
