@@ -15,7 +15,7 @@ S&P 500 + ETF prices          FRED macro indicators       Financial statements
      (yfinance)                    (FRED API)               + valuation metrics
           ↓                             ↓                       (yfinance)
   Python ingestion            Python ingestion             Python ingestion
-  Prefect orchestrated        Prefect orchestrated         Prefect orchestrated
+  Airflow orchestrated        Airflow orchestrated         Airflow orchestrated
           ↓                             ↓                            ↓
        Snowflake RAW schema (append-only / overwrite landing zone)
                         ↓
@@ -37,9 +37,9 @@ S&P 500 + ETF prices          FRED macro indicators       Financial statements
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 500 + ETF OHLCV prices, company metadata, financial statements, valuation metrics |
 | Ingestion | Python + FRED API | 95 macro economic indicators |
-| Orchestration | Prefect Cloud | Scheduling, retries, observability |
+| Orchestration | Apache Airflow 2.9.3 on AWS EC2 | Scheduling, retries, observability — always-on cloud server |
 | Warehouse | Snowflake | Three-schema ELT architecture |
-| Transformation | dbt Cloud | Kimball dimensional modeling |
+| Transformation | dbt Core | Kimball dimensional modeling |
 | Quality | dbt tests + GitHub Actions | 25+ automated tests on every PR |
 | AI Code Review | Claude API + GitHub Actions | Automated PR code review comments |
 | Application | Streamlit + Claude API | Natural language analytics interface |
@@ -63,7 +63,7 @@ S&P 500 + ETF prices          FRED macro indicators       Financial statements
   - Daily append builds a time series of how ratios evolve
 
 ### Macro Indicators (FRED)
-95 series across 11 categories:
+90 series across 11 categories (5 premium series removed — SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225 require a paid FRED subscription):
 - Interest rates and yield curve (DFF, DGS2, DGS10, T10Y2Y, T10Y3M...)
 - Inflation (CPI, Core CPI, PCE, Core PCE, PPI...)
 - Labor market (UNRATE, U6RATE, PAYEMS, JOLTS, jobless claims...)
@@ -73,7 +73,6 @@ S&P 500 + ETF prices          FRED macro indicators       Financial statements
 - Money supply (M1, M2, monetary base...)
 - Energy and commodities (WTI, Brent, natural gas, gasoline...)
 - FX rates (USD/EUR, USD/JPY, USD/GBP, USD/CNY, USD/CAD...)
-- Market indicators (VIX, NASDAQ, S&P 500 index, Wilshire 5000...)
 - Consumer and sentiment (UMich sentiment, durable goods, consumer credit...)
 
 ---
@@ -85,7 +84,7 @@ EQUITY_ANALYTICS
 ├── RAW
 │   ├── PRICES               — daily OHLCV, 616 tickers, incremental append
 │   ├── COMPANY_INFO         — company metadata, overwrite on each run
-│   ├── MACRO_INDICATORS     — 95 FRED series, overwrite on each run
+│   ├── MACRO_INDICATORS     — 90 FRED series, overwrite on each run
 │   ├── FINANCIAL_STATEMENTS — EAV format (income/balance/cashflow), weekly overwrite
 │   └── VALUATION_METRICS    — point-in-time ratios, daily append
 ├── STAGING (views)
@@ -110,25 +109,33 @@ EQUITY_ANALYTICS
 
 ## Pipeline Architecture
 
-### Ingestion Layer
+### Orchestration
 
-Three independent Prefect pipelines:
+Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose on an AWS EC2 instance (t3.small, us-east-2). The Airflow UI is accessible at `http://<ec2-ip>:8080`. All DAGs use the TaskFlow API (`@dag` / `@task` decorators) with LocalExecutor.
 
-**`equity_pipeline`** — daily weekdays 9am
+### Airflow DAGs
+
+**`equity_daily`** — schedule `0 14 * * 1-5` (9am ET weekdays)
 - Fetches current S&P 500 components dynamically from Wikipedia
+- Checks max loaded date and extracts only new trading days
 - Bulk price download for all 616 tickers in a single yfinance call
-- Per-ticker metadata extraction with 2-second rate limiting delay
-- Incremental loads — checks max loaded date and only extracts new rows
+- Per-ticker metadata extraction with rate limiting
 - Appends to `RAW.PRICES`, overwrites `RAW.COMPANY_INFO`
 
-**`macro_pipeline`** — daily weekdays 9am
-- 95 series fetched with graceful error handling for invalid series IDs
+**`macro_daily`** — schedule `0 14 * * 1-5` (9am ET weekdays)
+- 90 FRED series fetched with graceful error handling
 - Overwrites `RAW.MACRO_INDICATORS` on each run
 
-**`fundamentals_pipeline`** — weekly Saturday 10am + daily valuation snapshot weekdays 9am
+**`fundamentals_weekly`** — schedule `0 15 * * 6` (10am ET Saturdays)
 - Financial statements: full overwrite of `RAW.FINANCIAL_STATEMENTS` (catches restatements)
+- ETFs filtered out — no 10-K filings
+
+**`valuation_daily`** — schedule `0 14 * * 1-5` (9am ET weekdays)
 - Valuation metrics: daily append to `RAW.VALUATION_METRICS` (builds time series)
-- ETFs filtered out for statement extraction — no 10-K filings
+
+**`backfill_prices`** — `schedule=None` (manual trigger only)
+- Loads historical OHLCV back to 2010-01-01 for all 616 tickers
+- Batches of 50 tickers with 30-second delays between batches
 
 ### Transformation Layer
 
@@ -236,8 +243,11 @@ yfinance returns ~276 unique line items with spaced names (e.g. "Total Revenue",
 **Rate limiting for metadata and fundamentals extraction**
 Price data uses yfinance bulk download — all 616 tickers in one request. Company metadata, financial statements, and valuation metrics require per-ticker API calls. A 2-second delay between tickers prevents Yahoo Finance rate limiting.
 
-**Key pair authentication throughout**
-Snowflake's MFA policy blocks password-based programmatic access. RSA key pair auth is used for dbt Cloud and GitHub Actions — the private key never travels over a network. Keys are stored as encrypted GitHub Secrets and injected at runtime.
+**RSA key-pair authentication (never expires)**
+All Snowflake connections use RSA key-pair auth — the connector receives DER-encoded private key bytes loaded from a `.pem` file via the `cryptography` library. Unlike programmatic access tokens, RSA keys never expire. The public key is registered in Snowflake once; the private key is stored locally (gitignored) and as a GitHub Secret for CI.
+
+**Airflow on EC2 (always-on orchestration)**
+Moving from a laptop-dependent Prefect setup to Airflow running in Docker on an EC2 instance means pipelines execute on schedule whether or not a local machine is running. The EC2 security group restricts port 22 (SSH) and port 8080 (Airflow UI) to a known IP.
 
 **Isolated CI schemas**
 Each GitHub Actions run builds into `CI_{pr_number}` — a fresh, isolated Snowflake schema. Concurrent PR runs never interfere. Production MARTS schema is only written to on merge to main.
@@ -253,11 +263,17 @@ A GitHub Actions workflow calls the Claude API with all modified files and posts
 equityanalytics/
 ├── ingestion/
 │   ├── extract.py                # yfinance extraction — S&P 500 scraper, bulk price download
-│   ├── extract_fred.py           # FRED API extraction — 95 series
+│   ├── extract_fred.py           # FRED API extraction — 90 series
 │   ├── extract_fundamentals.py   # Financial statements (EAV) + valuation metrics
-│   ├── load.py                   # Snowflake bulk loading, get_max_date, get_min_date
-│   ├── pipeline.py               # Prefect flows: equity, macro, backfill
-│   └── pipeline_fundamentals.py  # Prefect flows: fundamentals test, backfill, weekly, daily valuation
+│   └── load.py                   # Snowflake bulk loading, get_max_date, get_min_date
+├── airflow/
+│   ├── dags/
+│   │   ├── dag_equity_daily.py       # equity_daily DAG — prices + company info
+│   │   ├── dag_macro_daily.py        # macro_daily DAG — FRED series
+│   │   ├── dag_fundamentals.py       # fundamentals_weekly + valuation_daily DAGs
+│   │   └── dag_backfill.py           # backfill_prices DAG — manual trigger only
+│   ├── logs/                         # Airflow task logs (gitignored)
+│   └── plugins/                      # Custom operators (future)
 ├── dbt_project/
 │   ├── models/
 │   │   ├── staging/              # stg_prices, stg_companies, stg_macro_indicators,
@@ -267,6 +283,9 @@ equityanalytics/
 │   │                             #   fact_macro_readings, fact_fundamentals, fact_valuation_snapshot
 │   ├── tests/                    # Singular business rule tests
 │   └── macros/                   # generate_schema_name
+├── app/
+│   └── db/
+│       └── snowflake.py          # Snowflake connection + query helpers for the Streamlit app
 ├── agents/
 │   ├── chart_agent.py            # Streamlit + Claude chat application
 │   └── code_reviewer.py          # AI code review agent
@@ -274,8 +293,9 @@ equityanalytics/
 │   └── workflows/
 │       ├── dbt_ci.yml            # dbt build + test on every PR, prod deploy on merge
 │       └── code_review.yml       # AI code review comment on every PR
-├── deploy.py                     # Prefect deployment registration (gitignored in practice)
+├── docker-compose.yml            # Airflow services (webserver, scheduler, init, postgres)
 ├── dbt_project.yml               # dbt project config
+├── profiles.yml                  # dbt Core connection profile (gitignored)
 ├── requirements.txt
 ├── .env.example
 └── CONTEXT.md                    # Project state reference
@@ -287,9 +307,9 @@ equityanalytics/
 
 ### Prerequisites
 - Python 3.11+
-- Snowflake account (free 30-day trial sufficient)
-- Prefect Cloud account (free tier — note: 5 deployment limit)
-- dbt Cloud account (free Developer tier)
+- Snowflake account with an RSA key pair registered for your user
+- Docker + Docker Compose (for Airflow)
+- AWS EC2 instance (t3.small or larger) — or run Airflow locally
 - Anthropic API key
 - FRED API key (free at fred.stlouisfed.org)
 
@@ -297,11 +317,28 @@ equityanalytics/
 Copy `.env.example` to `.env`:
 
 ```
-SNOWFLAKE_USER=your_snowflake_username
+SNOWFLAKE_USER=DBT_USER
 SNOWFLAKE_ACCOUNT=your_account_identifier
-SNOWFLAKE_TOKEN=your_programmatic_access_token
+SNOWFLAKE_PRIVATE_KEY_PATH=snowflake_private_key.pem
+# SNOWFLAKE_PRIVATE_KEY_PASSPHRASE=   # only if key was generated with a passphrase
+SNOWFLAKE_WAREHOUSE=TRANSFORM_WH
+SNOWFLAKE_DATABASE=EQUITY_ANALYTICS
+SNOWFLAKE_SCHEMA=MARTS
+
+AIRFLOW_SECRET_KEY=replace-with-output-of-openssl-rand-hex-32
+AIRFLOW_ADMIN_USER=admin
+AIRFLOW_ADMIN_EMAIL=you@example.com
+AIRFLOW_ADMIN_PASSWORD=replace-with-strong-password
+
 ANTHROPIC_API_KEY=your_anthropic_key
 FRED_API_KEY=your_fred_api_key
+```
+
+Generate `AIRFLOW_SECRET_KEY` with:
+```bash
+openssl rand -hex 32
+# Windows PowerShell alternative:
+# -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
 ```
 
 ### Snowflake Setup
@@ -312,35 +349,57 @@ CREATE WAREHOUSE TRANSFORM_WH WAREHOUSE_SIZE='X-SMALL' AUTO_SUSPEND=60 AUTO_RESU
 CREATE DATABASE EQUITY_ANALYTICS;
 CREATE SCHEMA EQUITY_ANALYTICS.RAW;
 CREATE SCHEMA EQUITY_ANALYTICS.STAGING;
+CREATE SCHEMA EQUITY_ANALYTICS.INTERMEDIATE;
 CREATE SCHEMA EQUITY_ANALYTICS.MARTS;
+
+-- Register your RSA public key for the service user
+ALTER USER DBT_USER SET RSA_PUBLIC_KEY='<paste your public key here>';
 ```
 
-### Running the Daily Pipelines
+### RSA Key Pair Setup
 
 ```bash
-pip install -r requirements.txt
-
-# Start Prefect — registers and serves all scheduled pipelines
-python deploy.py
-
-# Trigger manual runs (in a second terminal)
-prefect deployment run 'equity-ingestion-pipeline/daily-equity-ingestion'
-prefect deployment run 'macro-ingestion-pipeline/daily-macro-ingestion'
-prefect deployment run 'fundamentals-ingestion-pipeline/weekly-fundamentals-ingestion'
+# Generate key pair (no passphrase for simplicity)
+openssl genrsa 2048 | openssl pkcs8 -topk8 -nocrypt -out snowflake_private_key.pem
+openssl rsa -in snowflake_private_key.pem -pubout -out snowflake_public_key.pem
 ```
 
-**Note:** Prefect free tier has a 5-deployment limit. If you hit it, run flows directly (see Backfill section below) or delete unused deployments in the Prefect Cloud UI before re-registering.
+Copy the public key content (without header/footer lines) and register it in Snowflake using the `ALTER USER` command above.
+
+### Starting Airflow
+
+```bash
+# First time only — initialize the database and create admin user
+docker compose run --rm airflow-init
+
+# Start webserver + scheduler (runs in background)
+docker compose up -d airflow-webserver airflow-scheduler
+
+# Airflow UI → http://localhost:8080
+```
+
+On EC2, replace `localhost` with your instance's public IP. Make sure port 8080 is open in your security group (restrict to your IP only).
 
 ### Running dbt
 
-In dbt Cloud IDE or locally with dbt Core:
-
+First, load environment variables (dbt Core does not auto-read `.env`):
 ```bash
-dbt build                                                    # all models and tests
-dbt test                                                     # tests only
-dbt build --select staging                                   # staging layer only
-dbt build --select fact_daily_prices --full-refresh          # force full rebuild of prices
-dbt build --select +fact_fundamentals +fact_valuation_snapshot --full-refresh  # fundamentals full rebuild
+# Linux/Mac
+export $(grep -v '^#' .env | xargs)
+
+# Windows PowerShell
+Get-Content .env | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '=' } | ForEach-Object {
+    $k, $v = $_ -split '=', 2; Set-Item "env:$($k.Trim())" $v.Trim()
+}
+```
+
+Then run dbt from the project root (where `profiles.yml` lives):
+```bash
+dbt debug --profiles-dir .                               # verify connection
+dbt build --profiles-dir .                               # all models and tests
+dbt test --profiles-dir .                                # tests only
+dbt build --profiles-dir . --select staging              # staging layer only
+dbt build --profiles-dir . --select fact_daily_prices --full-refresh
 ```
 
 ### Running the Analytics App
@@ -366,40 +425,37 @@ One-time operations to populate historical data. Both backfills are idempotent �
 
 Loads ~2.4M rows of daily OHLCV data across 616 tickers. Batched in groups of 50 with 30-second delays between batches.
 
-**Option A — via Prefect deployment (if under the 5-deployment limit):**
-```bash
-python deploy.py
-prefect deployment run 'backfill-pipeline/historical-backfill'
-```
+**Trigger via Airflow UI:**
+1. Go to `http://<ec2-ip>:8080`
+2. Enable the `backfill_prices` DAG
+3. Click "Trigger DAG"
 
-**Option B — direct invocation (bypasses deployment registry):**
+**Or trigger via CLI on the EC2 server:**
 ```bash
-python -c "
-from dotenv import load_dotenv; load_dotenv()
-from ingestion.pipeline import backfill_pipeline
-backfill_pipeline(start_date='2010-01-01', batch_size=50, batch_delay_seconds=30)
-"
+docker compose exec airflow-webserver airflow dags trigger backfill_prices
 ```
 
 After the backfill completes, run a full-refresh dbt build to propagate all historical rows through the transformation layer — the incremental filter would otherwise skip them:
 ```bash
-dbt build --select fact_daily_prices --full-refresh
+dbt build --profiles-dir . --select fact_daily_prices --full-refresh
 ```
 
 ### Fundamentals Backfill (all ~500 equity tickers)
 
 Loads financial statements and valuation metrics for the full equity universe. yfinance returns ~4 years annual + ~8 quarters per ticker, so the total dataset is bounded (~580K statement rows).
 
-**Direct invocation (recommended — avoids deployment limit):**
+**Trigger via Airflow UI:**
+1. Enable and trigger the `fundamentals_weekly` DAG manually
+
+**Or run directly:**
 ```bash
 python -c "
 from dotenv import load_dotenv; load_dotenv()
-from ingestion.pipeline_fundamentals import fundamentals_backfill_pipeline
-fundamentals_backfill_pipeline(batch_size=50, batch_delay_seconds=30, delay_seconds=2.0)
+from ingestion.extract_fundamentals import extract_all_financial_statements
+from ingestion.load import load_dataframe
+# ... see dag_fundamentals.py for full task logic
 "
 ```
-
-Progress logs directly to your terminal. Expect roughly 30-45 minutes total. Failed batches are logged by name — re-running the flow is safe and won't create duplicates.
 
 Validate the load before running dbt:
 ```sql
@@ -415,7 +471,7 @@ GROUP BY 1, 2 ORDER BY 1, 2;
 
 After validation, run dbt with full-refresh to build all historical rows into the mart layer:
 ```bash
-dbt build --select +fact_fundamentals +fact_valuation_snapshot --full-refresh
+dbt build --profiles-dir . --select +fact_fundamentals +fact_valuation_snapshot --full-refresh
 ```
 
 ### Adding New Tickers
@@ -423,18 +479,18 @@ dbt build --select +fact_fundamentals +fact_valuation_snapshot --full-refresh
 When expanding the ticker universe beyond the current 616:
 
 ```bash
-# 1. Run the equity pipeline to load new prices and metadata
-prefect deployment run 'equity-ingestion-pipeline/daily-equity-ingestion'
+# 1. Trigger equity_daily DAG to load new prices and metadata
+docker compose exec airflow-webserver airflow dags trigger equity_daily
 
 # 2. Full-refresh fact_daily_prices — the incremental filter
 #    (price_date > max existing) misses historical rows for brand new tickers
-dbt build --select fact_daily_prices --full-refresh
+dbt build --profiles-dir . --select fact_daily_prices --full-refresh
 
-# 3. Run the fundamentals pipeline for statements
-prefect deployment run 'fundamentals-ingestion-pipeline/weekly-fundamentals-ingestion'
+# 3. Trigger fundamentals_weekly DAG for statements
+docker compose exec airflow-webserver airflow dags trigger fundamentals_weekly
 
 # 4. Full-refresh fact_fundamentals for the same reason
-dbt build --select +fact_fundamentals --full-refresh
+dbt build --profiles-dir . --select +fact_fundamentals --full-refresh
 ```
 
 ---
@@ -470,5 +526,4 @@ dbt build --select +fact_fundamentals --full-refresh
 | Money supply | 5 | M1SL, M2SL, BOGMBASE |
 | Trade and FX | 13 | DEXUSEU, DEXJPUS, DEXCHUS, BOPTEXP |
 | Energy and commodities | 5 | DCOILWTICO, DCOILBRENTEU, DHHNGSP |
-| Market indicators | 9 | VIXCLS, SP500, NASDAQCOM, WILL5000PR |
-| **Total** | | **~95** |
+| **Total** | | **~90** |
