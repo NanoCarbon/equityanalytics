@@ -28,7 +28,15 @@ logs/
 dbt_internal_packages/
 
 
-snowflake_private_key.pem
-snowflake_public_key.pem
-
 code_review.md
+
+# Private keys — catch all formats, not just specific filenames
+*.pem
+*.p8
+
+# dbt profiles (contains credentials — use env vars instead)
+profiles.yml
+
+# Airflow logs (generated at runtime)
+airflow/logs/**
+!airflow/logs/.gitkeep

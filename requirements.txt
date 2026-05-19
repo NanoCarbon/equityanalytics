@@ -1,10 +1,20 @@
-prefect
+# ── Data extraction ───────────────────────────────────────────────
 yfinance
 pandas
+requests
+python-dotenv
+
+# ── Database ──────────────────────────────────────────────────────
 snowflake-connector-python
 snowflake-connector-python[pandas]
+cryptography              # required for RSA key-pair auth
+
+# ── dbt (transformations) ─────────────────────────────────────────
+dbt-snowflake
+# NOTE: Apache Airflow runs inside Docker — do NOT add it here.
+#       See docker-compose.yml for the Airflow setup.
+
+# ── Application ───────────────────────────────────────────────────
 anthropic
 streamlit
 plotly
-requests
-python-dotenv
