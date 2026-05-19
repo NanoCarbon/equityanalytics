@@ -4,6 +4,8 @@ import logging
 import streamlit as st
 import pandas as pd
 import snowflake.connector
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,17 +13,45 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _load_private_key() -> bytes:
+    """
+    Load the RSA private key and return DER bytes for the Snowflake connector.
+    Key-pair auth never expires — no more manual token rotation.
+
+    Reads:
+        SNOWFLAKE_PRIVATE_KEY_PATH       path to .pem file (default: snowflake_private_key.pem)
+        SNOWFLAKE_PRIVATE_KEY_PASSPHRASE passphrase if the key is encrypted (optional)
+    """
+    key_path = os.environ.get(
+        "SNOWFLAKE_PRIVATE_KEY_PATH", "snowflake_private_key.pem"
+    )
+    passphrase_str = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
+    passphrase = passphrase_str.encode() if passphrase_str else None
+
+    with open(key_path, "rb") as f:
+        p_key = serialization.load_pem_private_key(
+            f.read(),
+            password=passphrase,
+            backend=default_backend(),
+        )
+
+    return p_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+
+
 @st.cache_resource
 def get_snowflake_connection():
-    logger.info("Opening Snowflake connection")
+    logger.info("Opening Snowflake connection (key-pair auth)")
     return snowflake.connector.connect(
         user=os.environ["SNOWFLAKE_USER"],
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         warehouse="TRANSFORM_WH",
         database="EQUITY_ANALYTICS",
         schema="MARTS",
-        authenticator="programmatic_access_token",
-        token=os.environ["SNOWFLAKE_TOKEN"],
+        private_key=_load_private_key(),
         network_timeout=30,
         login_timeout=15,
     )
