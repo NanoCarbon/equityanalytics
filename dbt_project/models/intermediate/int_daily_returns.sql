@@ -1,5 +1,3 @@
-{{ config(schema='staging') }}
-
 with prices as (
     select * from {{ ref('stg_prices') }}
 ),

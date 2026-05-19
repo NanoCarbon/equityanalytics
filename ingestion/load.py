@@ -10,6 +10,32 @@ from cryptography.hazmat.backends import default_backend
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────
+# Table name whitelist — prevents SQL injection via f-string queries
+# ─────────────────────────────────────────────────────────────────
+
+_ALLOWED_TABLES = frozenset({
+    "PRICES",
+    "COMPANY_INFO",
+    "MACRO_INDICATORS",
+    "FINANCIAL_STATEMENTS",
+    "VALUATION_METRICS",
+})
+
+
+def _validate_table_name(table_name: str) -> str:
+    """
+    Return the upper-cased table name if it is in the known whitelist,
+    otherwise raise ValueError.  Prevents arbitrary SQL execution via
+    f-string interpolation in get_max_date / get_min_date.
+    """
+    upper = table_name.upper()
+    if upper not in _ALLOWED_TABLES:
+        raise ValueError(
+            f"Table '{table_name}' is not in the allowed list: {sorted(_ALLOWED_TABLES)}"
+        )
+    return upper
+
 
 # ─────────────────────────────────────────────────────────────────
 # Auth helper
@@ -30,12 +56,25 @@ def _load_private_key() -> bytes:
     passphrase_str = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
     passphrase = passphrase_str.encode() if passphrase_str else None
 
-    with open(key_path, "rb") as f:
-        p_key = serialization.load_pem_private_key(
-            f.read(),
-            password=passphrase,
-            backend=default_backend(),
+    if not os.path.exists(key_path):
+        raise FileNotFoundError(
+            f"Snowflake private key not found at '{key_path}'. "
+            "Set SNOWFLAKE_PRIVATE_KEY_PATH in your .env or place the key file there."
         )
+
+    try:
+        with open(key_path, "rb") as f:
+            p_key = serialization.load_pem_private_key(
+                f.read(),
+                password=passphrase,
+                backend=default_backend(),
+            )
+    except (ValueError, TypeError) as e:
+        raise RuntimeError(
+            f"Failed to parse Snowflake private key at '{key_path}'. "
+            "Check that SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is set if the key is encrypted. "
+            f"Original error: {e}"
+        ) from e
 
     return p_key.private_bytes(
         encoding=serialization.Encoding.DER,
@@ -80,7 +119,7 @@ def get_max_date(table_name: str) -> date | None:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT MAX(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
-            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+            FROM EQUITY_ANALYTICS.RAW.{_validate_table_name(table_name)}
         """)
         result = cursor.fetchone()[0]
         logger.info("get_max_date(%s) = %s", table_name, result)
@@ -105,7 +144,7 @@ def get_min_date(table_name: str) -> date | None:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT MIN(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
-            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+            FROM EQUITY_ANALYTICS.RAW.{_validate_table_name(table_name)}
         """)
         result = cursor.fetchone()[0]
         logger.info("get_min_date(%s) = %s", table_name, result)

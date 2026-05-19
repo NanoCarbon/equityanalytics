@@ -28,12 +28,25 @@ def _load_private_key() -> bytes:
     passphrase_str = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
     passphrase = passphrase_str.encode() if passphrase_str else None
 
-    with open(key_path, "rb") as f:
-        p_key = serialization.load_pem_private_key(
-            f.read(),
-            password=passphrase,
-            backend=default_backend(),
+    if not os.path.exists(key_path):
+        raise FileNotFoundError(
+            f"Snowflake private key not found at '{key_path}'. "
+            "Set SNOWFLAKE_PRIVATE_KEY_PATH in your .env or place the key file there."
         )
+
+    try:
+        with open(key_path, "rb") as f:
+            p_key = serialization.load_pem_private_key(
+                f.read(),
+                password=passphrase,
+                backend=default_backend(),
+            )
+    except (ValueError, TypeError) as e:
+        raise RuntimeError(
+            f"Failed to parse Snowflake private key at '{key_path}'. "
+            "Check that SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is set if the key is encrypted. "
+            f"Original error: {e}"
+        ) from e
 
     return p_key.private_bytes(
         encoding=serialization.Encoding.DER,
@@ -48,9 +61,9 @@ def get_snowflake_connection():
     return snowflake.connector.connect(
         user=os.environ["SNOWFLAKE_USER"],
         account=os.environ["SNOWFLAKE_ACCOUNT"],
-        warehouse="TRANSFORM_WH",
-        database="EQUITY_ANALYTICS",
-        schema="MARTS",
+        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "TRANSFORM_WH"),
+        database=os.environ.get("SNOWFLAKE_DATABASE", "EQUITY_ANALYTICS"),
+        schema=os.environ.get("SNOWFLAKE_SCHEMA", "MARTS"),
         private_key=_load_private_key(),
         network_timeout=30,
         login_timeout=15,

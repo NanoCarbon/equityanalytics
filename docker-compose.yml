@@ -11,7 +11,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-    AIRFLOW__WEBSERVER__SECRET_KEY: change-me-in-production
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
     AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: '30'
     # Python packages installed at container startup (keeps image small)
     _PIP_ADDITIONAL_REQUIREMENTS: >-
@@ -57,12 +57,12 @@ services:
       - |
         airflow db migrate
         airflow users create \
-          --username admin \
+          --username "${AIRFLOW_ADMIN_USER:-admin}" \
           --firstname Admin \
           --lastname User \
           --role Admin \
-          --email admin@example.com \
-          --password admin
+          --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" \
+          --password "${AIRFLOW_ADMIN_PASSWORD}"
         echo "Airflow initialized."
     restart: "no"
 
