@@ -1,6 +1,6 @@
 """
 DAG: equity_supplemental_weekly
-Schedule: Every Saturday at 11am ET (16:00 UTC) — runs after fundamentals_weekly
+Schedule: Every Saturday at 11pm ET (04:00 UTC Sunday) — runs after fundamentals_weekly
 
 Loads four supplemental yfinance data types that don't need daily refreshes:
 
@@ -38,7 +38,7 @@ RATE_DELAY = 0.5
 @dag(
     dag_id='equity_supplemental_weekly',
     description='Dividends, earnings history, analyst data → Snowflake RAW (weekly)',
-    schedule='0 16 * * 6',     # 11am ET (16:00 UTC) on Saturdays
+    schedule='0 4 * * 0',      # 11pm ET Saturday (4am UTC Sunday)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
@@ -48,7 +48,7 @@ def equity_supplemental_weekly():
 
     @task()
     def get_tickers() -> list:
-        """Resolve full ticker universe (~616 S&P 500 + ETFs)."""
+        """Resolve full ticker universe (S&P 1500 + ETFs, ~1,600 tickers)."""
         from ingestion.extract import get_all_tickers
         tickers = get_all_tickers()
         logger.info("Loaded %d tickers", len(tickers))
@@ -56,12 +56,10 @@ def equity_supplemental_weekly():
 
     @task()
     def get_equity_tickers() -> list:
-        """Equity-only tickers (~500) — ETFs have no earnings or analyst coverage."""
-        from ingestion.extract import get_all_tickers, get_etf_tickers
-        all_tickers = get_all_tickers()
-        etf_set = set(get_etf_tickers())
-        equities = [t for t in all_tickers if t not in etf_set]
-        logger.info("Filtered to %d equity tickers", len(equities))
+        """S&P 1500 equity-only tickers (~1,500) -- ETFs have no earnings or analyst coverage."""
+        from ingestion.extract import get_equity_tickers as _get_equity_tickers
+        equities = _get_equity_tickers()
+        logger.info("Loaded %d equity tickers", len(equities))
         return equities
 
     @task(retries=2, retry_delay=timedelta(minutes=5))

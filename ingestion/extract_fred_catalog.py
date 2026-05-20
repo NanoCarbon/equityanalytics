@@ -104,7 +104,7 @@ def get_all_releases(api_key: str) -> pd.DataFrame:
     Returns a DataFrame with release_id, release_name, press_release, link.
     Typically ~300 releases covering all major source agencies.
     """
-    data = _get(api_key, "releases", limit=1000, order_by="popularity", sort_order="desc")
+    data = _get(api_key, "releases", limit=1000, order_by="release_id", sort_order="asc")
     releases = data.get("releases", [])
 
     if not releases:

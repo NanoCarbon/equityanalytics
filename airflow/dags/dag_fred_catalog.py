@@ -1,6 +1,6 @@
 """
 DAG: fred_catalog_refresh
-Schedule: First of every month at midnight UTC
+Schedule: 11pm ET on the 1st of each month (04:00 UTC on 2nd)
 
 Crawls all FRED statistical releases (~300) and builds a metadata catalog
 of every series available — with popularity scores, frequency, units, and
@@ -58,7 +58,7 @@ DEFAULT_ARGS = {
 @dag(
     dag_id='fred_catalog_refresh',
     description='Build FRED series metadata catalog → Snowflake RAW (monthly)',
-    schedule='0 0 1 * *',          # 1st of each month, midnight UTC
+    schedule='0 4 2 * *',          # 11pm ET on 1st of each month (4am UTC on 2nd)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,

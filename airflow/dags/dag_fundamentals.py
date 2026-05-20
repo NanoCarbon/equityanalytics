@@ -4,11 +4,11 @@ Replaces: fundamentals_pipeline() + valuation_pipeline() in pipeline_fundamental
 
 Two separate DAGs defined in one file:
 
-  fundamentals_weekly  — runs every Saturday at 10am ET
+  fundamentals_weekly  — runs every Saturday at 11pm ET
     - Extracts income statement, balance sheet, cash flow for ~500 S&P 500 equities
     - Full overwrite (catches retroactive restatements)
 
-  valuation_daily — runs Monday–Friday at 9am ET
+  valuation_daily — runs Monday–Friday at 11pm ET
     - Extracts PE, margins, EV/EBITDA, etc. for all ~616 tickers
     - Appends a new snapshot row per ticker (builds a time series)
 """
@@ -35,7 +35,7 @@ DEFAULT_ARGS = {
 @dag(
     dag_id='fundamentals_weekly',
     description='Financial statements for S&P 500 equities → Snowflake RAW (weekly)',
-    schedule='0 15 * * 6',     # 10am ET (15:00 UTC) on Saturdays
+    schedule='0 4 * * 0',      # 11pm ET Saturday (4am UTC Sunday)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
@@ -97,7 +97,7 @@ def fundamentals_weekly():
 @dag(
     dag_id='valuation_daily',
     description='Valuation metrics snapshot for all tickers → Snowflake RAW (daily)',
-    schedule='0 14 * * 1-5',   # 9am ET, Mon–Fri
+    schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,

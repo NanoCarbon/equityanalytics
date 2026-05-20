@@ -2,7 +2,7 @@
 DAG: equity_daily
 Replaces: equity_pipeline() in ingestion/pipeline.py
 
-Schedule: Monday–Friday at 9am ET (14:00 UTC)
+Schedule: Monday–Friday at 11pm ET (04:00 UTC next day)
 What it does:
   1. Gets the full ticker list (~616 tickers)
   2. Finds the latest date already in Snowflake (incremental boundary)
@@ -35,7 +35,7 @@ DEFAULT_ARGS = {
 @dag(
     dag_id='equity_daily',
     description='Daily prices + company metadata → Snowflake RAW',
-    schedule='0 14 * * 1-5',   # 9am ET, Mon–Fri
+    schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,              # don't backfill missed runs
     default_args=DEFAULT_ARGS,
