@@ -193,3 +193,175 @@ def extract_company_info(
 
     logger.info("Extracted metadata for %d tickers", len(records))
     return pd.DataFrame(records)
+
+
+def extract_dividends_and_splits(
+    tickers: List[str],
+    delay_seconds: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Extract full dividend and stock split history for all tickers.
+    yfinance returns history back to IPO — this is a full overwrite source.
+    Per-ticker failures are skipped so the batch continues.
+    """
+    records = []
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers, 1):
+        try:
+            actions = yf.Ticker(ticker).actions  # Date index, Dividends + Stock Splits cols
+            if actions is not None and not actions.empty:
+                df = actions.reset_index()
+                df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+                df["ticker"] = ticker
+                df["extracted_at"] = datetime.utcnow()
+                records.append(df)
+        except Exception as e:
+            logger.warning("Could not fetch actions for %s: %s", ticker, e)
+
+        if i % 100 == 0:
+            logger.info("Dividends/splits progress: %d/%d", i, total)
+        if i < total:
+            time.sleep(delay_seconds)
+
+    if not records:
+        logger.warning("No dividend/split data returned for any ticker")
+        return pd.DataFrame()
+
+    result = pd.concat(records, ignore_index=True)
+    logger.info(
+        "Extracted %d dividend/split rows for %d tickers",
+        len(result), result["ticker"].nunique(),
+    )
+    return result
+
+
+def extract_earnings_history(
+    tickers: List[str],
+    delay_seconds: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Extract EPS actuals vs. analyst estimates history from yfinance.
+    Covers ~8–20 quarters per ticker. Full overwrite source.
+    """
+    records = []
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers, 1):
+        try:
+            hist = yf.Ticker(ticker).earnings_history
+            if hist is not None and not hist.empty:
+                df = hist.reset_index()
+                df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+                df["ticker"] = ticker
+                df["extracted_at"] = datetime.utcnow()
+                records.append(df)
+        except Exception as e:
+            logger.warning("Could not fetch earnings history for %s: %s", ticker, e)
+
+        if i % 100 == 0:
+            logger.info("Earnings history progress: %d/%d", i, total)
+        if i < total:
+            time.sleep(delay_seconds)
+
+    if not records:
+        logger.warning("No earnings history returned for any ticker")
+        return pd.DataFrame()
+
+    result = pd.concat(records, ignore_index=True)
+    logger.info(
+        "Extracted %d earnings rows for %d tickers",
+        len(result), result["ticker"].nunique(),
+    )
+    return result
+
+
+def extract_analyst_recommendations(
+    tickers: List[str],
+    delay_seconds: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Extract analyst firm upgrade/downgrade history (Buy / Hold / Sell ratings).
+    Returns several years of rating changes per ticker. Full overwrite source.
+    """
+    records = []
+    total = len(tickers)
+
+    for i, ticker in enumerate(tickers, 1):
+        try:
+            recs = yf.Ticker(ticker).recommendations
+            if recs is not None and not recs.empty:
+                df = recs.reset_index()
+                df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+                df["ticker"] = ticker
+                df["extracted_at"] = datetime.utcnow()
+                records.append(df)
+        except Exception as e:
+            logger.warning("Could not fetch recommendations for %s: %s", ticker, e)
+
+        if i % 100 == 0:
+            logger.info("Recommendations progress: %d/%d", i, total)
+        if i < total:
+            time.sleep(delay_seconds)
+
+    if not records:
+        logger.warning("No analyst recommendations returned for any ticker")
+        return pd.DataFrame()
+
+    result = pd.concat(records, ignore_index=True)
+    logger.info(
+        "Extracted %d recommendation rows for %d tickers",
+        len(result), result["ticker"].nunique(),
+    )
+    return result
+
+
+def extract_analyst_price_targets(
+    tickers: List[str],
+    delay_seconds: float = 0.5,
+) -> pd.DataFrame:
+    """
+    Extract current analyst price target consensus (mean, high, low, count).
+    Returns one row per ticker — append daily to build a time series.
+    """
+    from datetime import date as _date
+    records = []
+    total = len(tickers)
+    snapshot_date = _date.today()
+
+    for i, ticker in enumerate(tickers, 1):
+        try:
+            pt = yf.Ticker(ticker).analyst_price_targets
+            if pt is None:
+                pass
+            elif isinstance(pt, dict) and pt:
+                record = {k.lower(): v for k, v in pt.items()}
+                record["ticker"] = ticker
+                record["snapshot_date"] = snapshot_date
+                record["extracted_at"] = datetime.utcnow()
+                records.append(record)
+            elif isinstance(pt, pd.DataFrame) and not pt.empty:
+                df = pt.reset_index()
+                df.columns = [c.lower().replace(" ", "_") for c in df.columns]
+                df["ticker"] = ticker
+                df["snapshot_date"] = snapshot_date
+                df["extracted_at"] = datetime.utcnow()
+                records.extend(df.to_dict("records"))
+        except Exception as e:
+            logger.warning("Could not fetch price targets for %s: %s", ticker, e)
+
+        if i % 100 == 0:
+            logger.info("Price targets progress: %d/%d", i, total)
+        if i < total:
+            time.sleep(delay_seconds)
+
+    if not records:
+        logger.warning("No analyst price targets returned for any ticker")
+        return pd.DataFrame()
+
+    result = pd.DataFrame(records)
+    logger.info(
+        "Extracted analyst price targets for %d tickers",
+        result["ticker"].nunique() if "ticker" in result.columns else 0,
+    )
+    return result

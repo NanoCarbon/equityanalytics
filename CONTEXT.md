@@ -44,7 +44,7 @@ EQUITY_ANALYTICS
 
 ## Data coverage
 - 616 tickers — full S&P 500 (scraped live from Wikipedia) + top ETFs
-- 90 FRED macro series across 11 categories (5 premium series removed — see Known Issues)
+- ~108 FRED macro series across 12 categories (premium series excluded — use yfinance for equity indexes)
 - Financial statements: income statement, balance sheet, cash flow (annual + quarterly)
   - EAV format in RAW/staging, pivoted to ~35 named columns in marts
   - ~276 unique line items from yfinance (spaced names, e.g. "Total Revenue")
@@ -52,6 +52,10 @@ EQUITY_ANALYTICS
 - Valuation metrics: 37 fields (PE, P/B, margins, growth, dividends, beta, etc.)
   - All tickers including ETFs (beta, dividend yield still useful)
   - Daily snapshots build a time series
+- Dividends & splits: full corporate action history back to IPO (weekly overwrite)
+- Earnings history: EPS actuals vs. analyst estimates, ~8–20 quarters per equity (weekly overwrite)
+- Analyst recommendations: upgrade/downgrade history from analyst firms (weekly overwrite)
+- Analyst price targets: mean/high/low/count consensus snapshot (weekly append)
 
 ## Airflow DAGs
 All DAGs in `airflow/dags/`. Extract + load are combined into single tasks because Airflow XCom
@@ -59,11 +63,13 @@ serializes return values to a database — DataFrames are too large to pass betw
 
 | DAG | Schedule | File | Description |
 |---|---|---|---|
-| `equity_daily` | `0 14 * * 1-5` | dag_equity_daily.py | Prices + company info |
-| `macro_daily` | `0 14 * * 1-5` | dag_macro_daily.py | 90 FRED macro series |
+| `equity_daily` | `0 14 * * 1-5` | dag_equity_daily.py | Prices + company info (incremental) |
+| `macro_daily` | `0 14 * * 1-5` | dag_macro_daily.py | ~108 FRED macro series (last 365d, overwrite) |
 | `fundamentals_weekly` | `0 15 * * 6` | dag_fundamentals.py | Financial statements (full overwrite) |
 | `valuation_daily` | `0 14 * * 1-5` | dag_fundamentals.py | Valuation snapshot (daily append) |
-| `backfill_prices` | `None` (manual) | dag_backfill.py | Historical prices back to 2010 |
+| `equity_supplemental_weekly` | `0 16 * * 6` | dag_equity_supplemental.py | Dividends/splits, earnings history, analyst data |
+| `backfill_prices` | `None` (manual) | dag_backfill.py | Historical OHLCV prices back to 2010 |
+| `macro_backfill` | `None` (manual) | dag_macro_backfill.py | Full FRED history (back to series start) |
 
 Trigger a DAG manually from the EC2 server:
 ```bash
@@ -135,14 +141,16 @@ dbt build --profiles-dir .
 - GitHub Actions secrets: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY, ANTHROPIC_API_KEY
 
 ## Key files
-- ingestion/extract.py — yfinance extraction, S&P 500 Wikipedia scraper, bulk download
-- ingestion/extract_fred.py — FRED API extraction, 90 series dict
+- ingestion/extract.py — yfinance: prices, company info, dividends, earnings, analyst data
+- ingestion/extract_fred.py — FRED API: ~108 series dict, rate-limited extraction
 - ingestion/extract_fundamentals.py — financial statements (EAV) + valuation metrics extraction
 - ingestion/load.py — Snowflake bulk loading, get_max_date, get_min_date, SQL injection whitelist
-- airflow/dags/dag_equity_daily.py — equity_daily DAG
-- airflow/dags/dag_macro_daily.py — macro_daily DAG
+- airflow/dags/dag_equity_daily.py — equity_daily DAG (prices + company info)
+- airflow/dags/dag_macro_daily.py — macro_daily DAG (last 365d of FRED series)
 - airflow/dags/dag_fundamentals.py — fundamentals_weekly + valuation_daily DAGs
-- airflow/dags/dag_backfill.py — backfill_prices DAG
+- airflow/dags/dag_equity_supplemental.py — equity_supplemental_weekly DAG (dividends, earnings, analyst)
+- airflow/dags/dag_backfill.py — backfill_prices DAG (manual, OHLCV history to 2010)
+- airflow/dags/dag_macro_backfill.py — macro_backfill DAG (manual, full FRED history)
 - app/db/snowflake.py — Snowflake connection + query helpers for Streamlit app
 - agents/chart_agent.py — Streamlit + Claude chat app, two-step LLM pipeline
 - dbt_project.yml — dbt project config, model-paths: dbt_project/models
@@ -161,21 +169,7 @@ dbt build --profiles-dir .
 - Airflow admin password set via env var, not hardcoded
 
 ## Known issues / pending fixes (priority order)
-1. **Snowflake private key not mounted in Airflow containers** — blocks ALL DAGs
-   - Key lives at `~/equityanalytics/snowflake_private_key.pem` on EC2 host
-   - Fix: add to `docker-compose.yml` volumes block:
-     `- ./snowflake_private_key.pem:/opt/airflow/snowflake_private_key.pem:ro`
-   - And set `SNOWFLAKE_PRIVATE_KEY_PATH=/opt/airflow/snowflake_private_key.pem` in `.env` on EC2
-
-2. **FRED rate limiting (429 errors)**
-   - No delay between 90 sequential API calls
-   - Fix: add `time.sleep(0.5)` between calls in `extract_fred.py`
-
-3. **FRED premium series (403 errors)**
-   - SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225 require paid FRED subscription
-   - Fix: remove these 5 series from the series dict in `extract_fred.py`
-
-4. **GitHub branch protection**
+1. **GitHub branch protection**
    - Add rule on `main`: require PRs, require status checks, include administrators
 
 ## Backfill status

@@ -13,6 +13,8 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
     AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: '30'
+    # Key-pair auth — path inside the container (file mounted below)
+    SNOWFLAKE_PRIVATE_KEY_PATH: /opt/airflow/snowflake_private_key.pem
     # Python packages installed at container startup (keeps image small)
     _PIP_ADDITIONAL_REQUIREMENTS: >-
       yfinance pandas requests python-dotenv
@@ -23,6 +25,7 @@ x-airflow-common: &airflow-common
     - ./airflow/logs:/opt/airflow/logs          # Scheduler + task logs
     - ./airflow/plugins:/opt/airflow/plugins    # Custom operators (future)
     - ./ingestion:/opt/airflow/ingestion        # Reuse existing extract/load code
+    - ./snowflake_private_key.pem:/opt/airflow/snowflake_private_key.pem:ro  # Snowflake auth
   depends_on:
     airflow-db:
       condition: service_healthy
