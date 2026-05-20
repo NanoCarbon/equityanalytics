@@ -13,27 +13,70 @@ logger = logging.getLogger(__name__)
 HTTP_TIMEOUT = 30
 
 
+def _fetch_wikipedia_sp_tickers(url: str, index_name: str) -> List[str]:
+    """
+    Shared helper: fetch S&P index components from a Wikipedia table.
+    Tries common ticker column names across different index pages.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+    response = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
+    response.raise_for_status()
+    tables = pd.read_html(StringIO(response.text))
+    df = tables[0]
+    for col in ('Symbol', 'Ticker symbol', 'Ticker'):
+        if col in df.columns:
+            tickers = [str(t).replace('.', '-') for t in df[col].tolist() if pd.notna(t)]
+            logger.info("Fetched %d %s tickers from Wikipedia", len(tickers), index_name)
+            return tickers
+    raise ValueError(
+        f"Could not find ticker column in {index_name} Wikipedia table. "
+        f"Available columns: {df.columns.tolist()}"
+    )
+
+
 def get_sp500_tickers() -> List[str]:
-    """Fetch current S&P 500 components from Wikipedia."""
+    """Fetch current S&P 500 large-cap components from Wikipedia."""
     try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        response = requests.get(url, headers=headers, timeout=HTTP_TIMEOUT)
-        response.raise_for_status()
-        tables = pd.read_html(StringIO(response.text))
-        df = tables[0]
-        tickers = df['Symbol'].tolist()
-        tickers = [t.replace('.', '-') for t in tickers]
-        logger.info("Fetched %d S&P 500 tickers from Wikipedia", len(tickers))
-        return tickers
+        return _fetch_wikipedia_sp_tickers(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies",
+            "S&P 500",
+        )
     except requests.Timeout:
-        logger.warning("Wikipedia request timed out after %ds — using fallback list", HTTP_TIMEOUT)
+        logger.warning("Wikipedia S&P 500 request timed out -- using fallback list")
         return FALLBACK_SP500
     except Exception as e:
-        logger.warning("Could not fetch S&P 500 tickers: %s — using fallback list", e)
+        logger.warning("Could not fetch S&P 500 tickers: %s -- using fallback list", e)
         return FALLBACK_SP500
+
+
+def get_sp400_tickers() -> List[str]:
+    """Fetch current S&P 400 mid-cap components from Wikipedia."""
+    try:
+        return _fetch_wikipedia_sp_tickers(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies",
+            "S&P 400",
+        )
+    except requests.Timeout:
+        logger.warning("Wikipedia S&P 400 request timed out -- using fallback list")
+        return FALLBACK_SP400
+    except Exception as e:
+        logger.warning("Could not fetch S&P 400 tickers: %s -- using fallback list", e)
+        return FALLBACK_SP400
+
+
+def get_sp600_tickers() -> List[str]:
+    """Fetch current S&P 600 small-cap components from Wikipedia."""
+    try:
+        return _fetch_wikipedia_sp_tickers(
+            "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies",
+            "S&P 600",
+        )
+    except requests.Timeout:
+        logger.warning("Wikipedia S&P 600 request timed out -- using fallback list")
+        return FALLBACK_SP600
+    except Exception as e:
+        logger.warning("Could not fetch S&P 600 tickers: %s -- using fallback list", e)
+        return FALLBACK_SP600
 
 
 def get_etf_tickers() -> List[str]:
@@ -65,24 +108,80 @@ def get_etf_tickers() -> List[str]:
     ]
 
 
-# Fallback list in case Wikipedia scrape fails
+# ── Fallback lists (used when Wikipedia is unreachable) ───────────────────────
+# These are representative samples only — the live Wikipedia scrape is always
+# preferred and returns the full current index membership.
+
 FALLBACK_SP500 = [
     "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "BRK-B",
     "JPM", "JNJ", "V", "UNH", "XOM", "PG", "MA", "HD", "CVX", "MRK",
     "LLY", "ABBV", "PEP", "KO", "AVGO", "COST", "TMO", "MCD", "ACN",
     "ABT", "DHR", "TXN", "NEE", "PM", "RTX", "HON", "UPS", "AMGN",
     "SBUX", "IBM", "GE", "GS", "BLK", "MS", "AXP", "SPGI", "CAT",
-    "BA", "MMM", "DE", "LMT", "NOW"
+    "BA", "MMM", "DE", "LMT", "NOW",
+]
+
+FALLBACK_SP400 = [
+    # Mid-cap representative sample (~400 components)
+    "TXRH", "SAIA", "TREX", "RPM", "OLN", "HRB", "GGG", "UFPI",
+    "CALM", "CHDN", "MORN", "WTFC", "CFR", "GBCI", "SSB", "RLI",
+    "WDFC", "LANC", "SPSC", "SFM", "FRPT", "WEX", "BDC", "ITT",
+    "BWXT", "CNO", "COOP", "EEFT", "ENSG", "EPAM", "EXP", "FHI",
+    "GATX", "GFF", "HALO", "IBP", "INGR", "INVA", "JEF", "KMPR",
+    "LGND", "LIVN", "LPX", "MMS", "MTZ", "NAVI", "ONB", "PB",
+    "PIPR", "PNM", "POWI", "RBC", "RGEN", "ROIC", "SLG", "SNV",
+]
+
+FALLBACK_SP600 = [
+    # Small-cap representative sample (~600 components)
+    "BOOT", "CWST", "JBSS", "PLPC", "PLAB", "CLFD", "UFPT", "HAYN",
+    "MCRI", "ODC", "WSBC", "LBAI", "CFB", "SEM", "MPX", "CAKE",
+    "CACC", "CABO", "CCOI", "CBSH", "CEIX", "CHCO", "CMCO", "CNMD",
+    "COHU", "CORE", "CSR", "CTBI", "CTRE", "CVBF", "CVCO", "DAKT",
+    "DFIN", "DLX", "DXPE", "EFSC", "EMBC", "EPRT", "ESSA", "ESE",
+    "ETD", "EVTC", "EXTR", "FCF", "FCPT", "FISI", "FLGT", "FMNB",
+    "FORM", "FRME", "GBLI", "GES", "HLIT", "HMN", "HWKN", "INVA",
+    "IPAR", "JBGS", "KFY", "KFRC", "KRT", "LKFN", "LMAT", "LQDT",
 ]
 
 
 def get_all_tickers() -> List[str]:
-    """Get combined list of S&P 500 + ETF tickers, deduplicated."""
+    """
+    Get the full S&P Composite 1500 + ETF ticker universe, deduplicated.
+
+    S&P 1500 = S&P 500 (large-cap) + S&P 400 (mid-cap) + S&P 600 (small-cap).
+    Covers ~90% of US investable market cap. Together with the ETF list this
+    produces roughly 1,600 unique tickers.
+
+    All three index lists are fetched live from Wikipedia on each call so index
+    rebalances are picked up automatically. Falls back to static lists if
+    Wikipedia is unavailable.
+    """
     sp500 = get_sp500_tickers()
-    etfs = get_etf_tickers()
-    all_tickers = list(dict.fromkeys(sp500 + etfs))  # preserves order, dedupes
-    logger.info("Total unique tickers: %d", len(all_tickers))
+    sp400 = get_sp400_tickers()
+    sp600 = get_sp600_tickers()
+    etfs  = get_etf_tickers()
+    all_tickers = list(dict.fromkeys(sp500 + sp400 + sp600 + etfs))
+    logger.info(
+        "Total unique tickers: %d  (S&P 500: %d | S&P 400: %d | S&P 600: %d | ETFs: %d)",
+        len(all_tickers), len(sp500), len(sp400), len(sp600), len(etfs),
+    )
     return all_tickers
+
+
+def get_equity_tickers() -> List[str]:
+    """
+    Get S&P 1500 equity-only tickers (no ETFs) -- for fundamentals extraction.
+
+    ETFs are excluded because they have no earnings, financial statements,
+    or analyst coverage. Returns ~1,500 tickers.
+    """
+    sp500 = get_sp500_tickers()
+    sp400 = get_sp400_tickers()
+    sp600 = get_sp600_tickers()
+    equity_tickers = list(dict.fromkeys(sp500 + sp400 + sp600))
+    logger.info("Total unique equity tickers: %d", len(equity_tickers))
+    return equity_tickers
 
 
 def extract_prices(

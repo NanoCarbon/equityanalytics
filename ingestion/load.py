@@ -165,6 +165,33 @@ def get_min_date(table_name: str) -> date | None:
         conn.close()
 
 
+def get_loaded_tickers(table_name: str) -> set:
+    """
+    Returns the set of distinct ticker symbols already present in a RAW table.
+    Returns an empty set if the table is empty or does not exist yet.
+
+    Used to diff the current ticker universe against what's already loaded,
+    so backfills can skip tickers that already have data.
+    """
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT DISTINCT TICKER FROM EQUITY_ANALYTICS.RAW.{_validate_table_name(table_name)}"
+        )
+        tickers = {row[0] for row in cursor.fetchall()}
+        logger.info("get_loaded_tickers(%s) = %d distinct tickers", table_name, len(tickers))
+        return tickers
+    except snowflake.connector.errors.ProgrammingError as e:
+        if "does not exist" in str(e).lower():
+            logger.info("Table %s does not exist yet — returning empty set", table_name)
+            return set()
+        logger.error("Snowflake error in get_loaded_tickers(%s): %s", table_name, e)
+        raise
+    finally:
+        conn.close()
+
+
 # ─────────────────────────────────────────────────────────────────
 # Bulk loader
 # ─────────────────────────────────────────────────────────────────

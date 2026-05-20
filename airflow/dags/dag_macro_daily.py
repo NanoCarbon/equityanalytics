@@ -1,14 +1,17 @@
 """
 DAG: macro_daily
-Replaces: macro_pipeline() in ingestion/pipeline.py
+Schedule: Monday–Friday at 11pm ET (04:00 UTC next day)
 
-Schedule: Monday–Friday at 9am ET (14:00 UTC)
 What it does:
-  1. Pulls 95 FRED macro series (interest rates, inflation, GDP, etc.)
-  2. Overwrites RAW.MACRO_INDICATORS in Snowflake
+  Pulls all 108 FRED macro series incrementally — only observations newer than
+  the most recent date already in RAW.MACRO_INDICATORS are fetched and appended.
 
-Full overwrite because FRED retroactively revises data (e.g. GDP estimates
-get updated months later). Overwriting ensures we always have the latest values.
+  FRED does retroactively revise data (GDP estimates, employment numbers), but
+  full overwrite every day was destroying the historical backfill. The better
+  pattern is incremental append for the daily run + a manual macro_backfill
+  trigger any time you want to re-pull full history with latest revisions.
+
+  Falls back to a 30-day lookback if the table is empty.
 """
 
 import sys
@@ -31,7 +34,7 @@ DEFAULT_ARGS = {
 @dag(
     dag_id='macro_daily',
     description='FRED macro indicators → Snowflake RAW (daily)',
-    schedule='0 14 * * 1-5',   # 9am ET, Mon–Fri
+    schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
@@ -40,28 +43,43 @@ DEFAULT_ARGS = {
 def macro_daily():
 
     @task(retries=3, retry_delay=timedelta(minutes=1))
-    def extract_and_load_macro(lookback_days: int = 365) -> int:
+    def extract_and_load_macro() -> int:
         """
-        Pull the last N days of all 95 FRED series and overwrite
-        RAW.MACRO_INDICATORS. Single task because the DataFrame is
-        too large to pass through XCom.
+        Incrementally fetch new FRED observations and append to RAW.MACRO_INDICATORS.
 
-        Returns the number of rows loaded.
+        Finds the most recent date already loaded and only requests data from
+        that date forward — preserving the full historical backfill.
+        Falls back to a 30-day lookback if the table is empty.
+
+        Returns the number of rows appended.
         """
         import os
+        from datetime import date, timedelta
         from ingestion.extract_fred import extract_all_fred_series
-        from ingestion.load import load_dataframe
+        from ingestion.load import load_dataframe, get_max_date
 
         api_key = os.environ["FRED_API_KEY"]
-        df = extract_all_fred_series(api_key, lookback_days=lookback_days)
+
+        max_date = get_max_date("MACRO_INDICATORS")
+        if max_date:
+            # Re-fetch from 7 days before max to catch any recent FRED revisions
+            start_date = (max_date - timedelta(days=7)).strftime("%Y-%m-%d")
+            lookback_days = None
+            logger.info("Incremental load: fetching FRED data from %s", start_date)
+        else:
+            start_date = None
+            lookback_days = 30
+            logger.info("Table empty — falling back to 30-day lookback")
+
+        df = extract_all_fred_series(api_key, lookback_days=lookback_days, start_date=start_date)
 
         if df is None or df.empty:
-            logger.info("No macro data returned")
+            logger.info("No new macro data returned")
             return 0
 
         logger.info("Extracted %d FRED observations", len(df))
-        rows = load_dataframe(df, "MACRO_INDICATORS", overwrite=True)
-        logger.info("Overwrote RAW.MACRO_INDICATORS with %d rows", rows)
+        rows = load_dataframe(df, "MACRO_INDICATORS", overwrite=False)
+        logger.info("Appended %d rows to RAW.MACRO_INDICATORS", rows)
         return rows
 
     extract_and_load_macro()
