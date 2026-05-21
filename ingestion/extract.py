@@ -243,7 +243,22 @@ def extract_prices(
 
     try:
         df = raw.stack(level=0, future_stack=True).reset_index()
-        df.columns = ["date", "ticker", "close", "high", "low", "open", "volume"]
+        # After stack the first two columns are always the date and ticker index
+        # levels (their exact names vary by yfinance version).  Newer yfinance
+        # releases also emit extra columns (e.g. "Dividends", "Capital Gains")
+        # when auto_adjust=True, which breaks a fixed positional rename.
+        # Rename by mapping known names, then select only the OHLCV subset.
+        col_names = list(df.columns)
+        rename_map = {
+            col_names[0]: "date",   # first index level  → date
+            col_names[1]: "ticker", # second index level → ticker
+        }
+        for col in col_names[2:]:
+            col_lower = str(col).lower()
+            if col_lower in ("close", "high", "low", "open", "volume"):
+                rename_map[col] = col_lower
+        df = df.rename(columns=rename_map)
+        df = df[["date", "ticker", "close", "high", "low", "open", "volume"]]
         df = df.dropna(subset=["close"])
         df["extracted_at"] = datetime.utcnow()
     except Exception as e:
