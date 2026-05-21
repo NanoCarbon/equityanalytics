@@ -205,6 +205,8 @@ VALUATION_FIELDS = [
 def extract_valuation_metrics(
     tickers: List[str],
     delay_seconds: float = 2.0,
+    batch_size: int = 100,
+    batch_pause: float = 30.0,
 ) -> pd.DataFrame:
     """
     Extract point-in-time valuation and ratio metrics from yfinance .info.
@@ -216,6 +218,11 @@ def extract_valuation_metrics(
     If running both in the same pipeline, consider combining the calls to avoid
     duplicate API hits. The data is loaded to a separate RAW table because
     the grain differs (valuation = daily time series vs company = SCD).
+
+    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
+    tickers. equity_daily and valuation_daily both run at 11pm ET and both call
+    .info — without batch pauses Yahoo Finance silently throttles after ~270
+    tickers (same failure mode seen in financial statements extraction).
     """
     records = []
     total = len(tickers)
@@ -254,8 +261,14 @@ def extract_valuation_metrics(
                 "extracted_at": extracted_at,
             })
 
+        # Per-ticker delay
         if i < total:
             time.sleep(delay_seconds)
+
+        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
+        if i % batch_size == 0 and i < total:
+            print(f"  Batch pause {batch_pause}s after {i} tickers...")
+            time.sleep(batch_pause)
 
     if skipped:
         print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
