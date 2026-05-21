@@ -206,6 +206,10 @@ def extract_prices(
         effective_start = start_date_str
         effective_end = end_date_str
     elif start_date is not None:
+        # Airflow XCom serialises task return values as JSON, so get_max_date()
+        # returns a string ('2026-05-19'). Accept both str and date.
+        if isinstance(start_date, str):
+            start_date = date.fromisoformat(start_date)
         effective_start = (
             datetime.combine(start_date, datetime.min.time()) + timedelta(days=1)
         ).strftime("%Y-%m-%d")

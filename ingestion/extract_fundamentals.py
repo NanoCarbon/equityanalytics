@@ -18,6 +18,7 @@ Valuation metrics come from yf.Ticker().info — same call as company metadata
 but loaded to a separate table with different grain (point-in-time snapshot vs SCD).
 """
 
+import math
 import yfinance as yf
 import pandas as pd
 import time
@@ -239,10 +240,18 @@ def extract_valuation_metrics(
             }
             for field in VALUATION_FIELDS:
                 value = info.get(field)
-                # yfinance sometimes returns 'Infinity' or very large sentinel values
-                if value is not None and isinstance(value, (int, float)):
-                    if abs(value) > 1e18:
-                        value = None
+                # yfinance sometimes returns the string 'Infinity' (not float inf)
+                # or very large sentinel numeric values — both poison PyArrow on load.
+                if value is not None:
+                    if isinstance(value, str):
+                        # Coerce string numerics; treat non-finite strings as null
+                        try:
+                            value = float(value)
+                        except (ValueError, TypeError):
+                            value = None
+                    if isinstance(value, (int, float)):
+                        if not math.isfinite(float(value)) or abs(value) > 1e18:
+                            value = None
                 row[field] = value
 
             row["extracted_at"] = extracted_at
