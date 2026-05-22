@@ -15,7 +15,7 @@ def render_overview():
         <div class="hero-title">Equity Analytics Pipeline</div>
         <div class="hero-sub">
             A production-style ELT pipeline covering the full S&amp;P 500 universe,
-            95 Federal Reserve macro indicators, and complete fundamental financial data —
+            175 Federal Reserve macro indicators, and complete fundamental financial data —
             modeled into a Kimball dimensional warehouse and exposed through a
             natural language analytics interface powered by Claude.
         </div>
@@ -95,7 +95,7 @@ def render_overview():
             </div>
             <div class="card-pills">
                 <div class="card-pill">S&amp;P 500 + top 100 ETFs by AUM</div>
-                <div class="card-pill">95 FRED series across 11 categories</div>
+                <div class="card-pill">175 FRED series across 12 categories</div>
                 <div class="card-pill">Income stmt · Balance sheet · Cash flow</div>
             </div>
         </div>

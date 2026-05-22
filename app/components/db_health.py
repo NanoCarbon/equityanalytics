@@ -60,7 +60,7 @@ HEALTH_PASSWORD = os.environ.get("HEALTH_CHECK_PASSWORD", "")
 T = {
     "prices_rows":         5_000_000,
     "company_info_rows":   1_500,
-    "macro_rows":          5_000,
+    "macro_rows":          100_000,
     "fin_stmt_rows":       100_000,
     "valuation_rows":      1_000,
     "div_rows":            2_000,
@@ -75,7 +75,7 @@ T = {
     "mart_prices_tickers": 1_500,
     "mart_fund_tickers":   1_200,
     "mart_val_tickers":    1_500,
-    "macro_mart_rows":     1_750,   # raw * 0.35 propagation ratio
+    "macro_mart_rows":     150_000,  # 175 series × full history (208k rows after expansion)
     "catalog_stale_days":  45,
 }
 
