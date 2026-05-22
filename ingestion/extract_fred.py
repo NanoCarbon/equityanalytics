@@ -15,6 +15,10 @@ HTTP_TIMEOUT = 30
 RATE_LIMIT_DELAY = 0.5
 
 FRED_SERIES = {
+    # ════════════════════════════════════════════════════════════════
+    # ORIGINAL SERIES (95 series)
+    # ════════════════════════════════════════════════════════════════
+
     # ── Interest rates ────────────────────────────────────────────
     "DFF":           "Fed Funds Rate (Daily Effective)",
     "FEDFUNDS":      "Fed Funds Rate (Monthly Effective)",
@@ -146,6 +150,160 @@ FRED_SERIES = {
 
     # ── Market risk ───────────────────────────────────────────────
     "VIXCLS":        "CBOE VIX Volatility Index",
+
+
+    # ════════════════════════════════════════════════════════════════
+    # TIER 1 — High priority: market-moving, widely followed
+    # ════════════════════════════════════════════════════════════════
+
+    # ── Senior Loan Officer Opinion Survey (SLOOS) ────────────────
+    # Quarterly survey of bank lending standards — best leading
+    # indicator for credit availability and corporate borrowing costs.
+    "DRTSCILM":      "SLOOS: C&I Loan Tightening Standards (Large/Mid Firms)",
+    "DRTSCIS":       "SLOOS: C&I Loan Tightening Standards (Small Firms)",
+    "DRSDCILM":      "SLOOS: C&I Loan Demand (Large/Mid Firms)",
+    "DRIWCIL":       "SLOOS: Willingness to Make Consumer Installment Loans",
+
+    # ── Recession indicators (NBER) ───────────────────────────────
+    # Binary 0/1 flag. Essential for overlaying recession shading on
+    # any chart and for conditioning factor returns on cycle phase.
+    "USREC":         "NBER Recession Indicator (Post-Peak Through Trough)",
+    "USRECM":        "NBER Recession Indicator (Peak Through Trough)",
+
+    # ── Chicago Fed macro/financial conditions ────────────────────
+    # CFNAI = best single GDP nowcast (85 indicators → 1 number).
+    # NFCI/ANFCI = financial conditions independently of VIX.
+    "CFNAI":         "Chicago Fed National Activity Index",
+    "CFNAIMA3":      "Chicago Fed National Activity Index (3-Month MA)",
+    "NFCI":          "Chicago Fed National Financial Conditions Index",
+    "ANFCI":         "Chicago Fed Adjusted National Financial Conditions Index",
+
+    # ── CPI sub-components ────────────────────────────────────────
+    # Shelter (~33% of CPI) is the stickiest component and the key
+    # driver of the "last mile" inflation debate. Services vs.
+    # commodities split is critical for regime analysis.
+    "CPIHOSSL":      "CPI: Housing and Shelter",
+    "CPIENGSL":      "CPI: Energy",
+    "CPIMEDSL":      "CPI: Medical Care",
+    "CPITRNSL":      "CPI: Transportation",
+    "CPIRECSL":      "CPI: Recreation",
+    "CUSR0000SAC":   "CPI: Commodities",
+    "CUSR0000SAS":   "CPI: Services",
+    "CUSR0000SAD":   "CPI: Durables",
+
+    # ── Atlanta Fed Sticky / Flexible Price CPI ───────────────────
+    # Modern decomposition: sticky items reset prices infrequently
+    # (shelter, medical); flexible items reset frequently (gas, food).
+    # Sticky CPI is a better measure of entrenched inflation.
+    "STICKCPIM157SFRBATL":    "Atlanta Fed Sticky Price CPI",
+    "CORESTICKM157SFRBATL":   "Atlanta Fed Core Sticky Price CPI",
+    "FLEXCPIM157SFRBATL":     "Atlanta Fed Flexible Price CPI",
+    "COREFLEXCPIM157SFRBATL": "Atlanta Fed Core Flexible Price CPI",
+
+
+    # ════════════════════════════════════════════════════════════════
+    # TIER 2 — Important for comprehensive macro coverage
+    # ════════════════════════════════════════════════════════════════
+
+    # ── Productivity and costs (BLS) ──────────────────────────────
+    # Rising unit labor costs squeeze corporate margins. Productivity
+    # growth is the fundamental driver of non-inflationary wage gains.
+    "OPHNFB":        "Nonfarm Business Labor Productivity (Output per Hour)",
+    "ULCNFB":        "Nonfarm Business Unit Labor Costs",
+    "PRS85006152":   "Nonfarm Business Real Hourly Compensation",
+    "ULCMFG":        "Manufacturing Unit Labor Costs",
+
+    # ── Employment Cost Index (BLS) ───────────────────────────────
+    # Broader than AHE — includes benefits, not just wages. The Fed
+    # watches this closely as a measure of labor cost inflation.
+    "ECIWAG":        "Employment Cost Index: Wages and Salaries (Private)",
+
+    # ── JOLTS additional sub-series ───────────────────────────────
+    # Quits rate = workers' confidence in finding a new job.
+    # Spiked during Great Resignation; declining quits = caution.
+    "JTSQUR":        "JOLTS: Quits Rate (Total Nonfarm)",
+    "JTSLDR":        "JOLTS: Layoffs and Discharges (Total Nonfarm)",
+
+    # ── Interest rate spreads (additional) ───────────────────────
+    # Treasury-Fed Funds spreads collapse when the curve inverts vs.
+    # the policy rate. Corporate-FF spreads detect credit stress.
+    "T10YFFM":       "10-Year Treasury Minus Fed Funds Rate",
+    "T5YFFM":        "5-Year Treasury Minus Fed Funds Rate",
+    "T1YFFM":        "1-Year Treasury Minus Fed Funds Rate",
+    "TB3SMFFM":      "3-Month T-Bill Minus Fed Funds Rate",
+    "AAAFF":         "Moody's Aaa Corporate Minus Fed Funds Rate",
+    "BAAFF":         "Moody's Baa Corporate Minus Fed Funds Rate",
+    "CPFF":          "3-Month Commercial Paper Minus Fed Funds Rate",
+
+    # ── PCE sub-components ────────────────────────────────────────
+    # Decompose consumer spending: goods vs. services rotation is a
+    # key theme post-COVID and in early cycle / late cycle analysis.
+    "PCEDG":         "PCE: Durable Goods",
+    "PCEND":         "PCE: Nondurable Goods",
+    "PCES":          "PCE: Services",
+
+    # ── GDP deflator ──────────────────────────────────────────────
+    "GDPDEF":        "GDP Implicit Price Deflator",
+
+    # ── HQM Corporate Bond Yield Curve ────────────────────────────
+    # Treasury yields used for pension discount rates. Relevant for
+    # insurance, financials, and pension-funded corporate analysis.
+    "HQMCB5YR":      "5-Year HQM Corporate Bond Spot Rate",
+    "HQMCB10YR":     "10-Year HQM Corporate Bond Spot Rate",
+    "HQMCB30YR":     "30-Year HQM Corporate Bond Spot Rate",
+
+    # ── Business loan delinquency ────────────────────────────────
+    "DRBLACBS":      "Business Loan Delinquency Rate (All Commercial Banks)",
+
+
+    # ════════════════════════════════════════════════════════════════
+    # TIER 3 — Sector depth and analytical completeness
+    # ════════════════════════════════════════════════════════════════
+
+    # ── Payroll breakdown by sector ───────────────────────────────
+    # Total nonfarm (PAYEMS) is in Tier 1. These sector splits enable
+    # analysis of which industries are driving job gains/losses.
+    "MANEMP":        "All Employees: Manufacturing",
+    "SRVPRD":        "All Employees: Service-Providing Industries",
+    "USCONS":        "All Employees: Construction",
+    "USFIRE":        "All Employees: Financial Activities",
+    "USMINE":        "All Employees: Mining and Logging",
+    "USTPU":         "All Employees: Trade, Transportation & Utilities",
+    "AWHAETP":       "Avg Weekly Hours: Total Private (Broader than Mfg)",
+
+    # ── Labor force additional ────────────────────────────────────
+    # EMRATIO is less manipulable than unemployment rate —
+    # doesn't exclude discouraged workers the same way.
+    "EMRATIO":       "Employment-Population Ratio",
+    "CNP16OV":       "Civilian Noninstitutional Population",
+
+    # ── Global commodity prices (IMF) ────────────────────────────
+    # Copper is the most-watched single commodity for global growth.
+    # Industrial metals and agricultural prices feed into PPI and CPI.
+    "PCOPPUSDM":     "Global Price of Copper (USD/Metric Ton)",
+    "PNICKUSDM":     "Global Price of Nickel (USD/Metric Ton)",
+    "PIORECRUSDM":   "Global Price of Iron Ore (USD/Dry Metric Ton)",
+    "PWHEAMTUSDM":   "Global Price of Wheat (USD/Metric Ton)",
+    "PMAIZMTUSDM":   "Global Price of Corn (USD/Metric Ton)",
+    "PCOTTINDUSDM":  "Global Price of Cotton (USD/Kilogram)",
+
+    # ── Industrial production detail ──────────────────────────────
+    "IPGMFN":        "Industrial Production: Manufacturing (NAICS)",
+
+    # ── Empire State Manufacturing Survey ─────────────────────────
+    # Released first business day of each month — earliest regional
+    # survey and a reliable early read on manufacturing momentum.
+    "GACDISA066MSFRBNY": "Empire State Mfg Survey: General Business Conditions (SA)",
+
+    # ── Construction and wholesale ────────────────────────────────
+    "TTLCON":        "Total Construction Spending",
+    "WHLSLRIMSA":    "Merchant Wholesalers Inventories",
+    "WHLSLRSMSA":    "Merchant Wholesalers Sales",
+
+    # ── Consumer credit and retail money ─────────────────────────
+    "TERMCBCCALLNS": "Credit Card Interest Rate (All Accounts)",
+    "WRMFNS":        "Retail Money Market Funds",
+    "COMPOUT":       "Commercial Paper Outstanding",
 }
 
 # Series that require a paid FRED subscription — excluded to avoid 403 errors

@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 108 Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 175 Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -36,7 +36,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 | Layer | Tool | Purpose |
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
-| Ingestion | Python + FRED API | 108 macro economic indicators + full FRED series catalog |
+| Ingestion | Python + FRED API | 175 macro economic indicators + full FRED series catalog |
 | Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
@@ -68,17 +68,19 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 - **Analyst price targets** — mean/high/low/count consensus snapshot appended weekly to build a time series
 
 ### Macro Indicators (FRED)
-108 series across 11 categories (5 premium series removed — SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225 require a paid FRED subscription):
-- Interest rates and yield curve (DFF, SOFR, DGS2, DGS10, T10Y2Y, T10Y3M, DFEDTARU, DFEDTARL...)
-- Inflation (CPI, Core CPI, PCE, Core PCE, PPI...)
-- Labor market (UNRATE, U6RATE, PAYEMS, JOLTS, jobless claims...)
-- GDP and growth (GDP, Real GDP, GDPPOT, industrial production, retail sales...)
-- Credit and financial conditions (HY spread, IG spread, TED spread, mortgage rates, LOANS...)
-- Housing (housing starts, building permits, Case-Shiller, existing home sales...)
-- Money supply (M1, M2, M2V, monetary base, WALCL, TOTRESNS, WTREGEN...)
-- Energy and commodities (WTI, Brent, natural gas, gasoline, gold...)
-- FX rates (USD/EUR, USD/JPY, USD/GBP, USD/CNY, DTWEXBGS...)
-- Consumer and sentiment (UMich sentiment, durable goods, consumer credit...)
+175 series across 12 categories. Premium index series (SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225) excluded — require a paid FRED subscription:
+- **Interest rates** (14) — DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, full Treasury curve DGS1MO → DGS30
+- **Yield curve & spreads** (18) — T10Y2Y, T10Y3M, DFII2–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
+- **Inflation** (20) — CPI headline/core, PCE headline/core, PPI, UMich inflation expectations, CPI sub-components (housing, energy, medical, transport, recreation, durables), Atlanta Fed sticky/flexible CPI, GDP deflator
+- **Labor market** (26) — UNRATE, U6RATE, PAYEMS, CIVPART, EMRATIO, CNP16OV, JOLTS (openings, hires, quits, layoffs), jobless claims, manufacturing/services/construction/financial/mining/trade payrolls, average hours, average earnings, ECI wages, productivity (OPHNFB), unit labor costs
+- **GDP & growth** (15) — GDP, real GDP, potential GDP, GDP deflator, industrial production (total + manufacturing + capacity utilization), durable/capital goods orders, inventory-to-sales ratio, CFNAI and 3-month MA
+- **Consumer** (10) — retail sales (total + ex-auto), PCE (total + durables + nondurables + services), disposable income, saving rate, consumer credit, credit card interest rate
+- **Credit & financial conditions** (18) — HY/IG/commercial paper spreads, corporate bond yields (Aaa/Baa), mortgage/residential/business loan delinquency rates, bank loans outstanding, deposits, commercial paper outstanding, SLOOS lending standards and demand (C&I + consumer), NFCI and adjusted NFCI
+- **Housing** (13) — mortgage rates (30yr/15yr), housing starts (total + single-family), building permits, new/existing home sales, median sale price, Case-Shiller, homeowner/rental vacancy rates, total construction spending
+- **Money supply** (11) — M1, M2, M2 velocity, monetary base, retail/institutional money funds, Fed balance sheet (WALCL), reserve balances, RRPONTSYD
+- **Trade & FX** (15) — exports, imports, export prices, broad USD index, 8 major currency pairs (EUR, JPY, GBP, CNY, CAD, BRL, KRW, INR, MXN), wholesale inventories and sales
+- **Energy & commodities** (12) — WTI, Brent, gasoline, natural gas, retail electricity, gold, copper, nickel, iron ore, wheat, corn, cotton
+- **Market indicators** (4) — VIX, NBER recession indicators (two variants), Empire State manufacturing survey
 
 ### FRED Series Catalog
 - **RAW.FRED_RELEASES** — one row per FRED statistical release (~300 rows), rebuilt monthly
@@ -94,7 +96,7 @@ EQUITY_ANALYTICS
 ├── RAW
 │   ├── PRICES                  -- daily OHLCV, ~1,600 tickers, incremental append
 │   ├── COMPANY_INFO            -- company metadata, overwrite on each run
-│   ├── MACRO_INDICATORS        -- 108 FRED series, incremental append
+│   ├── MACRO_INDICATORS        -- 175 FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS    -- EAV format (income/balance/cashflow), weekly overwrite
 │   ├── VALUATION_METRICS       -- point-in-time ratios, daily append
 │   ├── DIVIDENDS_AND_SPLITS    -- full corporate action history, weekly overwrite
@@ -102,7 +104,8 @@ EQUITY_ANALYTICS
 │   ├── ANALYST_RECOMMENDATIONS -- upgrade/downgrade history, weekly overwrite
 │   ├── ANALYST_PRICE_TARGETS   -- consensus price target snapshot, weekly append
 │   ├── FRED_RELEASES           -- FRED publication metadata, monthly overwrite
-│   └── FRED_SERIES_CATALOG     -- all FRED series metadata, monthly overwrite
+│   ├── FRED_SERIES_CATALOG     -- all FRED series metadata, monthly overwrite
+│   └── VW_FRED_HYGIENE         -- view: latest/prev obs date + row-count per series (duplicate detector)
 ├── STAGING (views)
 │   ├── STG_PRICES
 │   ├── STG_COMPANIES
@@ -139,7 +142,7 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 - Appends to `RAW.PRICES`, overwrites `RAW.COMPANY_INFO`
 
 **`macro_daily`** — schedule `0 4 * * 2-6` (11pm ET Mon–Fri)
-- 108 FRED series fetched with graceful 403/429 handling and rate limiting
+- All 175 FRED series fetched automatically — adding series to `FRED_SERIES` in `extract_fred.py` is sufficient, no DAG changes needed
 - Incremental append: queries `MAX(date)` already loaded and fetches only newer observations (with a 7-day overlap to catch FRED revisions)
 - Falls back to 30-day lookback if the table is empty
 
@@ -166,9 +169,14 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 - Loads historical OHLCV back to 2010-01-01 for all tickers
 - Batches of 50 tickers with 30-second delays between batches
 
-**`macro_backfill`** — `schedule=None` (manual trigger only)
-- Full FRED history from 1900-01-01 for all 108 configured series
-- Single overwrite of `RAW.MACRO_INDICATORS`
+**`macro_backfill`** — `schedule=None` (manual trigger only, **paused by default**)
+- Full FRED history from 1900-01-01 for **all** configured series — full overwrite of `RAW.MACRO_INDICATORS`
+- Use only when intentionally refreshing all series (e.g. after GDP restatements). Dangerous: overwrites history.
+
+**`fred_new_series_backfill`** — `schedule=None` (manual trigger only)
+- Safe alternative: computes the set difference between `FRED_SERIES` and series already in `RAW.MACRO_INDICATORS`
+- Fetches full history only for series not yet loaded — appends with `overwrite=False`, never touches existing data
+- Idempotent: safe to re-run. Use this after adding new series to `FRED_SERIES`.
 
 ### Transformation Layer
 
@@ -268,16 +276,25 @@ A Streamlit chat interface powered by Claude accepts natural language prompts, g
 - "Compare debt-to-equity ratios across bank stocks"
 - "Which stocks have the highest revenue growth?"
 
-### Admin Dashboard (port 8502)
+### DB Health Tab
 
-A separate local-only Streamlit app with a Windows 98 Win Forms aesthetic for pipeline operations. Launch via `launch_admin.bat` (or pin to Start via `pin_to_start_menu.ps1`).
+The main app includes a **DB Health** tab (tab 04) for pipeline operations and data quality checks. It is gated by environment variable (`HEALTH_TAB_ENABLED=true`) so it can be safely hidden when deployed to Streamlit Community Cloud.
 
-- **DAG Monitor** — live run status for all DAGs, pause/unpause toggle, trigger with full-screen confirmation dialog
-- **Log Viewer** — in-app Airflow log tailing directly from the filesystem, with auto-refresh and dark terminal display
-- **Data Quality** — color-coded pass/warn/fail health checks against Snowflake (same checks as `scripts/db_health_check.py`)
-- **Status Bar** — traffic-light dots for Docker, Airflow API, and Snowflake connectivity
+**Checks run across three sections:**
+- **RAW layer** — row counts for all 11 RAW tables, verifying minimum expected rows
+- **Coverage** — distinct ticker counts across prices, fundamentals, and valuations; FRED catalog row count; staleness of FRED series catalog
+- **MARTS layer** — row counts and ticker coverage across all 6 mart tables
+- **Infrastructure** (local only, `IS_LOCAL=true`) — Docker daemon status, Airflow API reachability, Snowflake connection
 
-The launcher also runs `scripts/db_health_check.py` in the terminal before opening the dashboard, so you get a quick structured summary on startup.
+**Security model:**
+
+| Env var | Local `.env` | Community Cloud |
+|---|---|---|
+| `HEALTH_TAB_ENABLED` | `true` | leave unset (hides content) or `true` + password |
+| `HEALTH_CHECK_PASSWORD` | optional | recommended if tab is enabled |
+| `IS_LOCAL` | `true` | leave unset (disables Docker/Airflow subprocess calls) |
+
+**Launch:** double-click `equity_analytics.bat` or pin to Start via `pin_to_start_menu.ps1`. The launcher runs `scripts/db_health_check.py` in the terminal before opening the app.
 
 ---
 
@@ -330,13 +347,15 @@ equityanalytics/
 │   └── load.py                       # Snowflake bulk loading, get_max_date, get_min_date
 ├── airflow/
 │   ├── dags/
-│   │   ├── dag_equity_daily.py           # equity_daily DAG -- prices + company info
-│   │   ├── dag_macro_daily.py            # macro_daily DAG -- FRED series
-│   │   ├── dag_fundamentals.py           # fundamentals_weekly + valuation_daily DAGs
-│   │   ├── dag_equity_supplemental.py    # equity_supplemental_weekly -- dividends, earnings, analyst data
-│   │   ├── dag_fred_catalog.py           # fred_catalog_refresh -- monthly FRED metadata crawl
-│   │   ├── dag_backfill.py               # backfill_prices DAG -- manual trigger only
-│   │   └── dag_macro_backfill.py         # macro_backfill DAG -- full FRED history, manual trigger
+│   │   ├── dag_equity_daily.py              # equity_daily DAG -- prices + company info
+│   │   ├── dag_macro_daily.py               # macro_daily DAG -- 175 FRED series, incremental
+│   │   ├── dag_fundamentals.py              # fundamentals_weekly + valuation_daily DAGs
+│   │   ├── dag_equity_supplemental.py       # equity_supplemental_weekly -- dividends, earnings, analyst data
+│   │   ├── dag_fred_catalog.py              # fred_catalog_refresh -- monthly FRED metadata crawl
+│   │   ├── dag_backfill.py                  # backfill_prices DAG -- manual trigger only
+│   │   ├── dag_backfill_new_tickers.py      # backfill_new_tickers -- new tickers only, safe re-run
+│   │   ├── dag_macro_backfill.py            # macro_backfill DAG -- full FRED history, all series (paused)
+│   │   └── dag_fred_new_series_backfill.py  # fred_new_series_backfill -- new series only, append-safe
 │   ├── logs/                             # Airflow task logs (gitignored)
 │   └── plugins/                          # Custom operators (future)
 ├── dbt_project/
@@ -360,7 +379,8 @@ equityanalytics/
 │       ├── log_viewer.py             # Airflow log filesystem reader
 │       └── data_quality.py           # Health check results table
 ├── scripts/
-│   └── db_health_check.py            # Reusable DB health check -- run anytime to confirm data quality
+│   ├── db_health_check.py            # Reusable DB health check -- run anytime to confirm data quality
+│   └── create_fred_hygiene_view.py   # One-shot: creates VW_FRED_HYGIENE in Snowflake RAW schema
 ├── app/
 │   └── db/
 │       └── snowflake.py              # Snowflake connection + query helpers for the Streamlit app
@@ -371,8 +391,9 @@ equityanalytics/
 │   └── workflows/
 │       ├── dbt_ci.yml            # dbt build + test on every PR, prod deploy on merge
 │       └── code_review.yml       # AI code review comment on every PR
-├── launch_admin.bat              # Admin dashboard launcher (docker up + health check + Streamlit)
-├── pin_to_start_menu.ps1         # Creates a Start Menu shortcut for launch_admin.bat
+├── equity_analytics.bat          # App launcher (docker up + Airflow health wait + db_health_check + Streamlit)
+├── pin_to_start_menu.ps1         # Creates a Start Menu shortcut for equity_analytics.bat
+├── CLAUDE.md                     # Claude Code project guide (architecture, patterns, pitfalls)
 ├── docker-compose.yml            # Airflow services (webserver, scheduler, init, postgres)
 ├── dbt_project.yml               # dbt project config
 ├── profiles.yml                  # dbt Core connection profile (gitignored)
@@ -515,12 +536,27 @@ After the backfill completes, run a full-refresh dbt build to propagate all hist
 dbt build --profiles-dir . --select fact_daily_prices --full-refresh
 ```
 
-### Macro Backfill (full FRED history)
+### Adding New FRED Series (targeted backfill)
 
-Loads the complete FRED history (back to 1900-01-01 where available) for all 108 configured series.
+After adding series to `FRED_SERIES` in `ingestion/extract_fred.py`:
+
+```bash
+# 1. Trigger the targeted backfill — appends full history for NEW series only, never touches existing data
+docker compose exec airflow-webserver airflow dags trigger fred_new_series_backfill
+
+# 2. Full-refresh the mart to incorporate new series history
+dbt build --profiles-dir . --select fact_macro_readings --full-refresh
+```
+
+The DAG computes `FRED_SERIES.keys() - series already in RAW.MACRO_INDICATORS` at runtime — idempotent and safe to re-run.
+
+### Macro Backfill (full FRED history — use sparingly)
+
+Overwrites `RAW.MACRO_INDICATORS` with complete FRED history for **all** configured series. Use only when intentionally refreshing revised data across all series (e.g. after GDP restatements). `macro_backfill` is paused by default to prevent accidental triggers.
 
 **Trigger via Airflow UI:**
-1. Enable and trigger the `macro_backfill` DAG
+1. Un-pause and trigger the `macro_backfill` DAG
+2. Re-pause it immediately after
 
 After completion, rebuild the mart:
 ```bash
@@ -583,32 +619,223 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 
 ## Macro Indicators Covered
 
-| Category | Series | Examples |
+| Category | Series | Key examples |
 |---|---|---|
-| Interest rates | 12 | DFF, SOFR, DGS2, DGS5, DGS10, DGS30, DFEDTARU, DFEDTARL |
-| Yield curve and real rates | 7 | T10Y2Y, T10Y3M, DFII2, DFII5, DFII10, DFII30 |
-| Inflation | 7 | CPIAUCSL, CPILFESL, PCEPI, PCEPILFE, PPIACO |
-| Labor market | 10 | UNRATE, U6RATE, PAYEMS, JTSJOL, ICSA |
-| GDP and growth | 10 | GDP, GDPC1, GDPPOT, INDPRO, TCU, DGORDER |
-| Consumer | 6 | RETAILSMNSA, PCE, DSPIC96, PSAVERT |
-| Credit and financial | 10 | BAMLH0A0HYM2, BAMLH0A3HYM2, MORTGAGE30US, LOANS, DRSFRMACBS |
-| Housing | 12 | HOUST, PERMIT, HSN1F, CSUSHPISA |
-| Money supply | 8 | M1SL, M2SL, M2V, BOGMBASE, WALCL, TOTRESNS, WTREGEN |
-| Trade and FX | 13 | DEXUSEU, DEXJPUS, DEXCHUS, DTWEXBGS, BOPTEXP |
-| Energy and commodities | 6 | DCOILWTICO, DCOILBRENTEU, DHHNGSP, GOLDAMGBD228NLBM |
-| **Total** | | **~108** |
+| Interest rates | 14 | DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, DGS1MO → DGS30 (full curve) |
+| Yield curve & spreads | 18 | T10Y2Y, T10Y3M, DFII2–DFII30 (TIPS), T10YFFM, AAAFF, BAAFF, TEDRATE, HQMCB |
+| Inflation | 20 | CPI/PCE/PPI, CPI sub-components (housing/energy/medical/transport), Atlanta Fed sticky/flexible CPI |
+| Labor market | 26 | UNRATE, U6RATE, PAYEMS, JOLTS (openings/hires/quits/layoffs), sector payrolls, productivity, ULC |
+| GDP & growth | 15 | GDP, GDPC1, GDPPOT, INDPRO, TCU, DGORDER, ISRATIO, CFNAI, CFNAIMA3 |
+| Consumer | 10 | RETAILSMNSA, PCE (total + durables + nondurables + services), DSPIC96, PSAVERT, TOTALSL |
+| Credit & financial | 18 | HY/IG/CP spreads, Aaa/Baa yields, mortgage/business/consumer delinquency, SLOOS, NFCI, ANFCI |
+| Housing | 13 | MORTGAGE30US/15US, HOUST, PERMIT, HSN1F, CSUSHPISA, MSPUS, TTLCON, vacancy rates |
+| Money supply | 11 | M1SL, M2SL, M2V, BOGMBASE, WALCL, TOTRESNS, RRPONTSYD, money market funds |
+| Trade & FX | 15 | Exports/imports, export prices, DTWEXBGS, USD/EUR/JPY/GBP/CNY/CAD/BRL/KRW/INR/MXN |
+| Energy & commodities | 12 | WTI, Brent, natural gas, gold, copper, nickel, iron ore, wheat, corn, cotton |
+| Market indicators | 4 | VIXCLS, USREC, USRECM, Empire State manufacturing (GACDISA) |
+| **Total** | **175** | |
 
 ---
 
 ## Roadmap
 
-### Near-term
-- **NASDAQ Trader file integration** — replace Wikipedia scraping with the official NASDAQ trader file (`nasdaqtrader.com/dynamic/SymbolDirectory/nasdaqtraded.txt`) to cover all ~8,000–9,000 US-listed securities. Adds OTC, micro-cap, and newly-listed stocks that don't appear in the S&P 1500. Filterable by security type (common stock vs ETF vs preferred), exchange, and test-issue flag. Expected DAG runtime ~80 minutes with current batch/delay settings.
+### Near-term (pipeline)
 - **Historical valuation ratios** — dbt model computing trailing PE, P/B, P/S, dividend yield, and beta from existing `fact_daily_prices` x `fact_fundamentals` join, using point-in-time financial statement dates to avoid look-ahead bias. Extends ratio history back to 2010 without any new data sources.
 - **dbt models for supplemental tables** — staging and mart models for `DIVIDENDS_AND_SPLITS`, `EARNINGS_HISTORY`, `ANALYST_RECOMMENDATIONS`, and `ANALYST_PRICE_TARGETS`.
+- **NASDAQ Trader file integration** — replace Wikipedia scraping with the official NASDAQ trader file to cover all ~8,000–9,000 US-listed securities including OTC, micro-cap, and newly-listed stocks.
 
-### Future
+### FRED Series Expansion Roadmap
+
+The goal is exhaustive coverage of the FRED catalog — systematic breadth over selective curation. Use `RAW.FRED_SERIES_CATALOG` to verify series IDs before adding each wave. Query against `RAW.MACRO_INDICATORS` to confirm gaps.
+
+**Wave 4 — Regional Federal Reserve Economic Surveys** (~15 series)
+
+Five regional Fed banks publish monthly manufacturing and services surveys. We have Chicago (CFNAI, NFCI) and New York (Empire State). Missing:
+
+| Series | Description | Bank |
+|---|---|---|
+| PHFRBIND | General Activity Index | Philadelphia Fed |
+| PHFRBNDI | New Orders Index | Philadelphia Fed |
+| PHFRBP | Prices Paid Index | Philadelphia Fed |
+| PHFRBE | Employment Index | Philadelphia Fed |
+| PHFRBSIP | Shipments Index | Philadelphia Fed |
+| RMBSIICS | Business Conditions Index | Richmond Fed |
+| RMBSIE | Employment Index | Richmond Fed |
+| DALLASMI | General Business Activity | Dallas Fed |
+| DALLASPE | Production Volume | Dallas Fed |
+| DALLASEO | Employment | Dallas Fed |
+| KANSASMI | Manufacturing Activity | Kansas City Fed |
+| KANSASPE | Production | Kansas City Fed |
+
+Rationale: Regional surveys provide leading signals on manufacturing activity and inflation pressure at a sub-national level — correlated with but leading national ISM data.
+
+---
+
+**Wave 5 — Government Finance & Fiscal Policy** (~8 series)
+
+Currently zero federal fiscal coverage despite fiscal policy being a primary macro driver.
+
+| Series | Description | Frequency |
+|---|---|---|
+| GFDEBTN | Gross Federal Debt (millions USD) | Quarterly |
+| GFDEGDQ188S | Federal Debt as % of GDP | Quarterly |
+| MTSDS133FMS | Federal Surplus or Deficit (monthly Treasury statement) | Monthly |
+| MTSO133FMS | Federal Government Total Receipts | Monthly |
+| FGEXPND | Federal Government Current Expenditures | Quarterly |
+| GGSAVE | Government Net Saving (national accounts) | Quarterly |
+| FYONGDA188S | Federal Net Outlays as % of Nominal GDP | Annual |
+| HBFRGDP | Federal Revenue as % of GDP | Annual |
+
+Rationale: Debt sustainability and fiscal impulse affect real rates, inflation, and growth. Completely absent from current coverage.
+
+---
+
+**Wave 6 — Banking System Profitability & Deposit Data** (~8 series)
+
+We have lending standards (SLOOS) and loan quality (delinquency rates) but not bank profitability or deposit flows.
+
+| Series | Description | Frequency |
+|---|---|---|
+| USNIM | Net Interest Margin (all commercial banks) | Quarterly |
+| USROE | Return on Equity (all commercial banks) | Quarterly |
+| USROA | Return on Assets (all commercial banks) | Quarterly |
+| DRCCLACBS | Credit Card Loan Delinquency Rate | Quarterly |
+| DRCLACBS | All Consumer Loan Delinquency Rate | Quarterly |
+| WDTGAL | Total Deposits at All Commercial Banks | Weekly |
+| DPSACBW027SBOG | Deposits (already loaded — confirm) | Weekly |
+| RESBALNS | Reserve Balances with Federal Reserve Banks | Weekly |
+
+Rationale: NIM compression/expansion is a primary driver of bank earnings and credit availability. Deposit flows (bank run risk) became critical post-SVB.
+
+---
+
+**Wave 7 — FX Completion (Remaining G10 + EM)** (~8 series)
+
+We have 9 currency pairs. Missing G10: CHF, AUD, NZD, NOK, SEK. Missing liquid EM: TRY, ZAR, TWD.
+
+| Series | Pair | Notes |
+|---|---|---|
+| DEXSZUS | CHF/USD | Swiss safe-haven flow indicator |
+| DEXUSAL | AUD/USD | Commodity-linked currency |
+| DEXNZUS | NZD/USD | Commodity + carry trade |
+| DEXNOUS | NOK/USD | Oil-correlated |
+| DEXSDUS | SEK/USD | European proxy |
+| DEXSFUS | ZAR/USD | EM risk appetite proxy |
+| DEXTHUS | THB/USD | SE Asia EM |
+
+Rationale: Systematic completion of all major traded pairs rather than selective coverage.
+
+---
+
+**Wave 8 — Granular Industry Employment (BLS CES)** (~12 series)
+
+We have 6 broad employment sectors. The BLS Current Employment Statistics has ~100 industry categories. Next level of granularity:
+
+| Series | Description |
+|---|---|
+| USINFO | All Employees: Information |
+| USGOVT | All Employees: Government (Federal + State + Local) |
+| CES0800000001 | All Employees: Leisure and Hospitality |
+| CES0600000001 | All Employees: Professional and Business Services |
+| CES0700000001 | All Employees: Education and Health Services |
+| AHETPI | Average Hourly Earnings: Total Private |
+| AHEMAN | Average Hourly Earnings: Manufacturing |
+| AWHI | Average Weekly Hours: All Private Industries |
+| JTSOPELY | JOLTS Job Openings: Professional and Business Services |
+| JTSOPHY | JOLTS Job Openings: Healthcare and Social Assistance |
+| JTSOGOSY | JOLTS Job Openings: Government |
+| JTSOCONSY | JOLTS Job Openings: Construction |
+
+Rationale: Sector-level employment is a leading indicator of sector-specific activity. Industry wage data drives PCE services inflation.
+
+---
+
+**Wave 9 — Price Indices Beyond CPI/PCE** (~10 series)
+
+We have consumer prices and PPI. Missing: import/export price indices, construction costs, producer price sub-components.
+
+| Series | Description | Frequency |
+|---|---|---|
+| IR | Import Price Index (all commodities) | Monthly |
+| IQ | Export Price Index (all commodities) | Monthly |
+| PPIFIS | PPI: Final Demand for Services | Monthly |
+| PPIFGS | PPI: Final Demand Goods | Monthly |
+| PPIIDC | PPI: Industrial Chemicals | Monthly |
+| PCUOMFGOMFG | PPI: Manufacturing | Monthly |
+| WPUFD49104 | PPI: Finished Consumer Foods | Monthly |
+| USALOLITONOSTSAM | OECD Composite Leading Indicator: US | Monthly |
+| BOGZ1FA896902605Q | Household Net Worth | Quarterly |
+
+Rationale: Import/export prices are leading indicators of CPI pass-through. Construction costs affect residential investment modeling.
+
+---
+
+**Wave 10 — Business Surveys & Composite Leading Indicators** (~8 series)
+
+Forward-looking survey data that markets price ahead of hard economic data.
+
+| Series | Description | Source |
+|---|---|---|
+| NAPMPI | ISM Manufacturing PMI | ISM (verify FRED availability) |
+| NAPMII | ISM Non-Manufacturing PMI | ISM (verify FRED availability) |
+| USALOLITONOSTSAM | OECD CLI for United States | OECD / FRED |
+| BSCICP02USM460S | Business Confidence Index | OECD / FRED |
+| CSCICP02USM460S | Consumer Confidence Index | OECD / FRED |
+| NFBUSOPSM | NFIB Business Optimism (if available) | NFIB |
+| GACDISA066MSFRBNY | Empire State (already loaded) | NY Fed |
+
+Note: Verify all series IDs against `RAW.FRED_SERIES_CATALOG` before adding — some survey series have restricted access or inconsistent FRED coverage.
+
+---
+
+**Wave 11 — Transportation & Supply Chain Proxies** (~6 series)
+
+Currently zero logistics coverage. FRED has limited but useful transportation series.
+
+| Series | Description | Frequency |
+|---|---|---|
+| TRUCKD11 | Truck Tonnage Index | Monthly |
+| RAILFRTCARLOADSAMSA | Rail Carloads (SA) | Monthly |
+| DTSGFHFNM | Freight Transportation Services Index | Monthly |
+| AIRRPAX | Air Revenue Passenger Miles (if available) | Monthly |
+
+Rationale: Freight volume is a coincident indicator of goods-producing economic activity. Trucking tonnage often leads GDP revisions.
+
+---
+
+**Wave 12 — Population & Demographic Flows** (~6 series)
+
+| Series | Description | Frequency |
+|---|---|---|
+| SPPOPtotusm | Total Population: US | Monthly |
+| NETMIGUSDOILBRUSA | Net International Migration | Annual |
+| NQPOP65USLTOT | Population 65+ | Quarterly |
+| USAPOPL | Total Population (BLS) | Monthly |
+| LFPART | Labor Force Participation components (further breakdown) | Monthly |
+
+Rationale: Demographic flows determine long-run labor supply, housing demand, and social security sustainability — missing from current coverage.
+
+---
+
+**Wave 13 — State-Level Economic Data** (~variable)
+
+Currently 100% national/aggregate data. State-level adds a geographic cross-section dimension.
+
+Priority states (by GDP): CA, TX, NY, FL, IL, PA, OH, GA, NJ, WA
+
+Key series types available per state:
+- Unemployment rates: `LASST{FIPS}UR` pattern
+- Nonfarm payrolls: `SMU{FIPS}000000001SA` pattern  
+- Coincident economic activity index: `{STATE}PHCI` (Philadelphia Fed state indices)
+- Home price indices: `{STATE}STHPI` (FHFA)
+
+Note: Adding state-level data requires deciding on either a sample of key states or a complete 50-state sweep. Recommend a dedicated DAG for state-level series rather than adding to `FRED_SERIES`.
+
+---
+
+### Future (non-FRED)
 - **Options data** — open interest, implied volatility surface from yfinance or a dedicated provider
 - **Insider transactions** — SEC Form 4 filings via EDGAR API
 - **Short interest** — FINRA-reported short volume and short interest ratio
-- **International equities** — major index components from LSE, TSX, ASX via yfinance (ticker suffix routing: `.L`, `.TO`, `.AX`)
+- **International equities** — major index components from LSE, TSX, ASX via yfinance (`.L`, `.TO`, `.AX` suffix routing)
+- **SEC EDGAR filings** — 8-K, 10-K, 10-Q structured data via EDGAR API for event-driven analysis
