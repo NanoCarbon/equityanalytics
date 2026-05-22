@@ -212,13 +212,26 @@ def load_dataframe(df: pd.DataFrame, table_name: str, overwrite: bool = False) -
     try:
         df.columns = [c.upper() for c in df.columns]
 
+        # Explicitly DROP before loading when overwrite=True.
+        # write_pandas(overwrite=True) is unreliable for large tables in some
+        # connector versions — it may emit CREATE TABLE (not CREATE OR REPLACE),
+        # which fails when the table already exists.  Explicit DROP is simpler
+        # and version-agnostic.  write_pandas then sees a clean slate and
+        # auto_create_table=True creates it fresh.
+        if overwrite:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"DROP TABLE IF EXISTS EQUITY_ANALYTICS.RAW.{table_name.upper()}"
+            )
+            cursor.close()
+
         success, num_chunks, num_rows, _ = write_pandas(
             conn=conn,
             df=df,
             table_name=table_name.upper(),
             database="EQUITY_ANALYTICS",
             schema="RAW",
-            overwrite=overwrite,
+            overwrite=False,        # table is already gone; let auto_create_table handle it
             auto_create_table=True,
         )
 

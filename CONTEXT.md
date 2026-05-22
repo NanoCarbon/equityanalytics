@@ -1,18 +1,20 @@
 # Equity Analytics Pipeline — Project Context
 
 ## Stack
-- Python + yfinance + Apache Airflow 2.9.3 on AWS EC2 (ingestion + orchestration)
+- Python + yfinance + Apache Airflow 2.9.3 on **local Docker** (ingestion + orchestration)
 - Snowflake (warehouse) — account: QYCMQJK-HTC96121, user: DBT_USER
 - dbt Core (transformation) — `profiles.yml` at repo root reads from env vars
-- Streamlit + Claude API (chat app) — deployed to Streamlit Community Cloud
+- Streamlit + Claude API (analytics app on port 8501) — currently local, planned for Community Cloud
 - GitHub Actions (CI/CD + AI code review)
 
 ## Infrastructure
-- EC2: t3.small, us-east-2, Amazon Linux 2023 — **stop when not actively debugging to save cost**
-- Airflow UI: `http://<ec2-public-ip>:8080`
-- Security group: port 22 (SSH) + port 8080 (Airflow UI) restricted to known IP
-- Docker Compose: `airflow-db` (Postgres metadata), `airflow-webserver`, `airflow-scheduler`
+- Docker Compose runs **locally on Windows** — not on EC2
+- Airflow UI: `http://localhost:8080`
+- Airflow admin credentials: `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` in `.env` (currently admin/admin for local dev)
+- `AIRFLOW_SECRET_KEY` in `.env` — signs Airflow sessions; keep stable or active sessions invalidate
+- Docker Compose services: `airflow-db` (Postgres metadata), `airflow-webserver`, `airflow-scheduler`, `airflow-init`
 - `./ingestion` is volume-mounted into all Airflow containers at `/opt/airflow/ingestion`
+- Code fixes to `ingestion/` deploy instantly — no container restart needed
 - Snowflake private key must also be mounted — see Known Issues
 
 ## Warehouse structure
@@ -85,9 +87,75 @@ when the operator can monitor them locally.
 | `backfill_new_tickers` | None (manual) | — | dag_backfill_new_tickers.py | Backfill ONLY tickers not yet in RAW.PRICES |
 | `macro_backfill` | None (manual) | — | dag_macro_backfill.py | Full FRED history (back to series start) |
 
-Trigger a DAG manually from the EC2 server:
-```bash
+Trigger a DAG manually (run from the repo root on Windows):
+```powershell
 docker compose exec airflow-webserver airflow dags trigger <dag_id>
+```
+
+## Streamlit app — DB Health tab
+
+The main Streamlit app (`app/streamlit_app.py`, port 8501) has four tabs:
+- **01 · Overview** — portfolio-level market summary
+- **02 · AI Analytics** — Claude-powered natural language SQL + Plotly charts
+- **03 · Event Study** — price reaction analysis around corporate events
+- **04 · DB Health** — pipeline health checks (gated, local only by default)
+
+**Launch:** double-click `launch_admin.bat` or pin to Start via `pin_to_start_menu.ps1`.
+
+`launch_admin.bat` does four things in sequence:
+1. `docker compose up -d` — ensures containers are running
+2. Polls `http://localhost:8080/health` (24 × 5s) — waits for Airflow webserver
+3. Runs `scripts/db_health_check.py` — prints structured health summary to terminal
+4. `streamlit run app/streamlit_app.py --server.port 8501` — opens the app
+
+**DB Health tab security model** (`app/components/db_health.py`):
+
+| Env var | Local `.env` | Community Cloud |
+|---|---|---|
+| `HEALTH_TAB_ENABLED` | `true` | leave unset (hides content) or `true` + password |
+| `HEALTH_CHECK_PASSWORD` | optional | recommended if tab is enabled |
+| `IS_LOCAL` | `true` | leave unset (suppresses Docker/Airflow subprocess calls) |
+
+- All Snowflake queries go through `execute_sql_cached` — no separate auth surface
+- Docker/Airflow status only runs when `IS_LOCAL=true` (localhost calls are meaningless and a shell risk in cloud)
+- Password gate uses `os.environ.get()` — works with both `.env` (local) and `st.secrets` (Community Cloud)
+- `_load_private_key()` in `app/db/snowflake.py` supports both `SNOWFLAKE_PRIVATE_KEY` (PEM string for Community Cloud) and `SNOWFLAKE_PRIVATE_KEY_PATH` (file path for local dev)
+
+**Airflow REST API — auth reference (read this before debugging 403s):**
+
+The REST API base URL is `http://localhost:8080/api/v1`. Credentials are `admin:admin` (set in `.env`).
+
+Three things must ALL be true for the API to work:
+1. `AIRFLOW__API__AUTH_BACKENDS` includes `basic_auth` — set in `docker-compose.yml` under `x-airflow-common` environment block. **This env var only takes effect after `docker compose up -d` (full recreate), NOT after `docker compose restart`.**
+2. The admin user exists in the Airflow metadata DB.
+3. The admin role has the correct FAB permissions.
+
+**Quick auth test (PowerShell):**
+```powershell
+$h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:admin")) }
+Invoke-RestMethod "http://localhost:8080/api/v1/dags" -Headers $h | Select-Object total_entries
+```
+Expected: `total_entries: 9`. Any other result → see troubleshooting below.
+
+**Troubleshooting by symptom:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Connection refused / closed unexpectedly | Webserver not up yet or stale PID file | Wait 30s; if still failing: `docker compose exec airflow-webserver rm -f /opt/airflow/airflow-webserver.pid` then `docker compose up -d airflow-webserver` |
+| 403 on ALL endpoints incl. `/dags` | `basic_auth` backend not active | `docker compose up -d airflow-webserver` (must recreate, not just restart) |
+| 403 after confirming basic_auth is set | Admin user missing or FAB perms stale | Run both: `docker compose exec airflow-webserver airflow users list` to confirm user exists, then `docker compose exec airflow-webserver airflow sync-perm` |
+| 200 on `/version` but 403 on `/dags` | Same as above — `/version` is public, `/dags` requires auth | Same fix as above |
+| "No data found" from `airflow users list` | DB wiped (volume reset) — user was never created | `docker compose exec airflow-webserver airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin` |
+| Auth worked before, now broken after webserver restart | `docker compose restart` doesn't reload env vars | Always use `docker compose up -d <service>` to pick up env var changes |
+
+**Trigger a DAG (no REST API needed — use CLI directly):**
+```powershell
+docker compose exec airflow-webserver airflow dags trigger <dag_id>
+```
+
+**Check task states for a run:**
+```powershell
+docker compose exec airflow-webserver airflow tasks states-for-dag-run <dag_id> <run_id>
 ```
 
 ## Key ingestion behaviors
@@ -179,9 +247,21 @@ dbt build --profiles-dir .
   - `app/db/snowflake.py` and `ingestion/load.py` both use `_load_private_key()` helper
   - Key-pair auth never expires — no token rotation needed
 - dbt: same RSA key via `profiles.yml` (`private_key_path` field) — profiles.yml is gitignored
+- Airflow: credentials and secret key in `.env` — see "Airflow REST API — auth reference" in the Streamlit app section above for full troubleshooting
+  - `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` (currently admin/admin) — used at init AND by the admin dashboard REST API client
+  - `AIRFLOW_SECRET_KEY` — signs sessions; generated with `python -c "import secrets; print(secrets.token_hex(32))"`
+  - `AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,...'` — set in `docker-compose.yml` (not `.env`); required for REST API basic auth to work; only takes effect after `docker compose up -d`, NOT `docker compose restart`
 - GitHub Actions secrets: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY, ANTHROPIC_API_KEY
 
 ## Key files
+- launch_admin.bat — launcher: docker up → Airflow health wait → db_health_check → Streamlit on port 8501
+- pin_to_start_menu.ps1 — creates a Start Menu shortcut for launch_admin.bat (run once elevated)
+- app/streamlit_app.py — main Streamlit app entry point (port 8501, four tabs)
+- app/components/db_health.py — DB Health tab: Snowflake checks + infra status; security-gated
+- app/components/overview.py — Overview tab
+- app/components/chat.py — AI Analytics tab (Claude + Snowflake SQL)
+- app/components/event_study.py — Event Study tab
+- app/db/snowflake.py — Snowflake connection, execute_sql_cached, _load_private_key (supports PEM string for Community Cloud)
 - ingestion/extract.py — yfinance: prices, company info, dividends, earnings, analyst data
   - get_sp500_tickers() / get_sp400_tickers() / get_sp600_tickers() — live Wikipedia scrapers
   - get_all_tickers() — full universe (S&P 1500 + ETFs, ~1,619)
@@ -215,21 +295,46 @@ dbt build --profiles-dir .
 - Merge to main -> dbt build runs with target: prod writing to MARTS directly
 - PRs blocked from merging if any dbt model or test fails
 
+## Bugs fixed (May 2026)
+
+### equity_daily — `TypeError: combine() argument 1 must be datetime.date, not str`
+- **Root cause:** Airflow XCom serializes task return values as JSON. `get_max_date()` returns a Python `date`, which XCom round-trips as the string `'2026-05-19'`. `extract_prices()` passed it directly to `datetime.combine()` which requires a `date` object.
+- **Fix:** `ingestion/extract.py` — added `if isinstance(start_date, str): start_date = date.fromisoformat(start_date)` before the `datetime.combine()` call.
+- **Impact:** This bug silently broke every nightly `equity_daily` run after the S&P 1500 expansion. No new prices were loading.
+
+### valuation_daily — `ArrowInvalid: Could not convert 'Infinity' with type str to double`
+- **Root cause:** yfinance returns the string literal `'Infinity'` (not `float('inf')`) for PE ratios on tickers with negative earnings. The sentinel filter only checked `isinstance(value, (int, float))`, so the string slipped through and poisoned PyArrow schema on Snowflake load.
+- **Fix:** `ingestion/extract_fundamentals.py` — added `import math`; now coerces strings through `float()` first, then applies `math.isfinite()` + `abs(value) > 1e18` guard.
+- **Impact:** `valuation_daily` ran 7 hours on ~1,400 tickers then failed on attempt 3. Fix prevents future recurrence.
+
+### equity_daily — `ValueError: Length mismatch: Expected axis has 8 elements, new values have 7 elements`
+- **Root cause:** Newer yfinance releases with `auto_adjust=True` emit extra columns (`Dividends`, `Capital Gains`) in the bulk download. The previous `df.columns = [7 fixed names]` positional rename crashed when the DataFrame had 8 columns.
+- **Fix:** `ingestion/extract.py` — replaced positional rename with a name-mapped rename (`rename_map` dict keyed on actual column names), then `df = df[["date", "ticker", "close", "high", "low", "open", "volume"]]` to select only OHLCV. Future extra columns are silently ignored.
+- **Impact:** Blocked the manual re-run on 2026-05-21 after the XCom fix. Confirmed fixed — prices loaded successfully in the next run.
+
+### Rate limiting — silent all-NaN returns from Yahoo Finance
+- **Root cause:** `equity_daily` and `valuation_daily` both fire at 11pm ET and both call `yf.Ticker().info` for ~1,619 tickers at 2s/ticker = 54 min of concurrent load. Yahoo Finance silently returns all-NaN DataFrames under sustained load (no error raised).
+- **Fix:** Added batch pauses to all six affected extraction functions:
+  - `extract_company_info`, `extract_valuation_metrics`: pause 30s every 100 tickers (`.info` endpoint)
+  - `extract_dividends_and_splits`, `extract_earnings_history`, `extract_analyst_recommendations`, `extract_analyst_price_targets`: pause 15s every 150 tickers
+  - `extract_financial_statements`: already had batch pauses
+
 ## Security fixes applied (May 2026)
 - SQL injection: `get_max_date`/`get_min_date` use `_validate_table_name()` whitelist
 - Snowflake auth: replaced programmatic access token (SNOWFLAKE_TOKEN) with RSA key-pair
 - `.gitignore`: `*.pem`, `*.p8` wildcards; added `profiles.yml`, `airflow/logs/**`
-- Airflow admin password set via env var, not hardcoded
+- Airflow admin credentials and secret key now configured via `.env` env vars
 
 ## Known issues / pending work (priority order)
 1. **GitHub branch protection** — Add rule on `main`: require PRs, require status checks, include administrators
-2. **FRED catalog retry hardening** — single 15s sleep + one retry is insufficient for sustained 429 bursts;
-   needs exponential backoff. Workaround: run catalog alone, never simultaneously with macro_backfill.
-3. **macro_backfill pending** — MACRO_INDICATORS was overwritten by macro_daily bug (now fixed).
-   Need to re-trigger macro_backfill to restore full history, then:
-   `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
-4. **FRED catalog pending confirmation** — fred_catalog_refresh was running as of session end (release ~190/324).
-   Verify it completed: check RAW.FRED_RELEASES row count should be ~300, RAW.FRED_SERIES_CATALOG ~50K+.
+2. **dbt full-refresh pending** — `fact_daily_prices`, `fact_fundamentals`, `fact_valuation_snapshot` need full-refresh after the price and valuation bug fixes to backfill the days that were missed:
+   ```powershell
+   dbt build --profiles-dir . --select fact_daily_prices fact_macro_readings +fact_fundamentals fact_valuation_snapshot --full-refresh
+   ```
+3. **valuation_daily re-trigger** — scheduled run for 2026-05-20 picked up automatically and is running (task: `extract_and_load_valuations`). Confirm it completes, then trigger for today's date if missed.
+4. **FRED catalog retry hardening** — single 15s sleep + one retry is insufficient for sustained 429 bursts; needs exponential backoff. Workaround: run catalog alone, never simultaneously with macro_backfill.
+5. **macro_backfill pending** — MACRO_INDICATORS was overwritten by a macro_daily bug (now fixed). Need to re-trigger macro_backfill to restore full history, then: `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
+6. **Update chart_agent.py system prompt** with supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS)
 
 ## Backfill status (as of May 2026)
 - Price backfill: COMPLETE — RAW.PRICES has ~9.2M rows, 2010 to present, ~1,619 tickers
@@ -237,12 +342,13 @@ dbt build --profiles-dir .
 - FRED macro backfill: PENDING — macro_daily overwrote history with a bug (now fixed).
   Re-trigger macro_backfill DAG, then full-refresh fact_macro_readings.
 - Fundamentals: equity_daily completed for all ~1,619 tickers (COMPANY_INFO confirmed ~1,600 rows)
-- FRED catalog: ran but may still be in progress — verify row counts before marking complete.
+- FRED catalog: confirm row counts — RAW.FRED_RELEASES should be ~300, RAW.FRED_SERIES_CATALOG ~50K+
 
 ## Next steps
-1. Confirm FRED catalog completed (check Airflow UI + row counts)
-2. Trigger macro_backfill to restore FRED history (do NOT run simultaneously with catalog)
-3. After macro_backfill: `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
-4. GitHub branch protection rules
-5. Update chart_agent.py system prompt with supplemental table schemas
-6. Historical valuation ratios dbt model (prices x fundamentals, avoids look-ahead bias)
+1. Confirm equity_daily (manual__2026-05-21T04:06:42) fully succeeds (extract_and_load_company_info running)
+2. Confirm valuation_daily (scheduled__2026-05-20) fully succeeds
+3. dbt full-refresh (see item 2 in Known Issues above)
+4. Trigger macro_backfill to restore FRED history (do NOT run simultaneously with fred_catalog_refresh)
+5. GitHub branch protection rules on `main`
+6. Update chart_agent.py system prompt with supplemental table schemas
+7. Historical valuation ratios dbt model (prices x fundamentals, avoids look-ahead bias)

@@ -18,6 +18,7 @@ Valuation metrics come from yf.Ticker().info — same call as company metadata
 but loaded to a separate table with different grain (point-in-time snapshot vs SCD).
 """
 
+import math
 import yfinance as yf
 import pandas as pd
 import time
@@ -84,6 +85,8 @@ def _normalize_statement(
 def extract_financial_statements(
     tickers: List[str],
     delay_seconds: float = 2.0,
+    batch_size: int = 100,
+    batch_pause: float = 30.0,
 ) -> pd.DataFrame:
     """
     Extract income statement, balance sheet, and cash flow for all tickers.
@@ -91,16 +94,21 @@ def extract_financial_statements(
       ticker, statement_type, frequency, period_end_date, line_item, value, extracted_at
 
     Each ticker requires a separate yfinance Ticker() instantiation.
-    Rate-limited with configurable delay between tickers.
+    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
+    tickers to avoid Yahoo Finance silently returning all-NaN DataFrames under
+    sustained load. Without batch pauses, ~82% of tickers come back empty when
+    running 1,500+ tickers with only a 2s per-ticker delay.
     """
     all_frames = []
     total = len(tickers)
     extracted_at = datetime.utcnow()
     skipped = []
+    tickers_with_data = 0
 
     for i, ticker in enumerate(tickers, 1):
         try:
             t = yf.Ticker(ticker)
+            ticker_got_data = False
 
             for stmt_type, attrs in STATEMENT_ATTRS.items():
                 for freq, attr_name in attrs.items():
@@ -111,18 +119,28 @@ def extract_financial_statements(
                         )
                         if not normalized.empty:
                             all_frames.append(normalized)
+                            ticker_got_data = True
                     except Exception as e:
                         print(f"  Warning: {ticker} {stmt_type} ({freq}) failed: {e}")
 
+            if ticker_got_data:
+                tickers_with_data += 1
+
             if i % 25 == 0:
-                print(f"  Fundamentals progress: {i}/{total} tickers")
+                print(f"  Fundamentals progress: {i}/{total} tickers ({tickers_with_data} with data so far)")
 
         except Exception as e:
             print(f"Warning: could not process {ticker}: {e}")
             skipped.append(ticker)
 
+        # Per-ticker delay
         if i < total:
             time.sleep(delay_seconds)
+
+        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
+        if i % batch_size == 0 and i < total:
+            print(f"  Batch pause {batch_pause}s after {i} tickers ({tickers_with_data} with data so far)...")
+            time.sleep(batch_pause)
 
     if skipped:
         print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
@@ -132,7 +150,7 @@ def extract_financial_statements(
         return pd.DataFrame()
 
     result = pd.concat(all_frames, ignore_index=True)
-    print(f"Extracted {len(result)} financial statement rows for {total - len(skipped)} tickers")
+    print(f"Extracted {len(result)} financial statement rows for {tickers_with_data} tickers")
     return result
 
 
@@ -188,6 +206,8 @@ VALUATION_FIELDS = [
 def extract_valuation_metrics(
     tickers: List[str],
     delay_seconds: float = 2.0,
+    batch_size: int = 100,
+    batch_pause: float = 30.0,
 ) -> pd.DataFrame:
     """
     Extract point-in-time valuation and ratio metrics from yfinance .info.
@@ -199,6 +219,11 @@ def extract_valuation_metrics(
     If running both in the same pipeline, consider combining the calls to avoid
     duplicate API hits. The data is loaded to a separate RAW table because
     the grain differs (valuation = daily time series vs company = SCD).
+
+    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
+    tickers. equity_daily and valuation_daily both run at 11pm ET and both call
+    .info — without batch pauses Yahoo Finance silently throttles after ~270
+    tickers (same failure mode seen in financial statements extraction).
     """
     records = []
     total = len(tickers)
@@ -215,10 +240,18 @@ def extract_valuation_metrics(
             }
             for field in VALUATION_FIELDS:
                 value = info.get(field)
-                # yfinance sometimes returns 'Infinity' or very large sentinel values
-                if value is not None and isinstance(value, (int, float)):
-                    if abs(value) > 1e18:
-                        value = None
+                # yfinance sometimes returns the string 'Infinity' (not float inf)
+                # or very large sentinel numeric values — both poison PyArrow on load.
+                if value is not None:
+                    if isinstance(value, str):
+                        # Coerce string numerics; treat non-finite strings as null
+                        try:
+                            value = float(value)
+                        except (ValueError, TypeError):
+                            value = None
+                    if isinstance(value, (int, float)):
+                        if not math.isfinite(float(value)) or abs(value) > 1e18:
+                            value = None
                 row[field] = value
 
             row["extracted_at"] = extracted_at
@@ -237,8 +270,14 @@ def extract_valuation_metrics(
                 "extracted_at": extracted_at,
             })
 
+        # Per-ticker delay
         if i < total:
             time.sleep(delay_seconds)
+
+        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
+        if i % batch_size == 0 and i < total:
+            print(f"  Batch pause {batch_pause}s after {i} tickers...")
+            time.sleep(batch_pause)
 
     if skipped:
         print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")

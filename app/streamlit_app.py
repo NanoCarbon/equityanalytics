@@ -22,6 +22,7 @@ for p in [str(repo_root), str(app_root)]:
 from components.overview import render_overview
 from components.chat import render_chat
 from components.event_study import render_event_study
+from components.db_health import render as render_health
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -47,10 +48,11 @@ st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_all
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 
-tab_overview, tab_chat, tab_events = st.tabs([
+tab_overview, tab_chat, tab_events, tab_health = st.tabs([
     "01 · Overview",
     "02 · AI Analytics",
     "03 · Event Study",
+    "04 · DB Health",
 ])
 
 with tab_overview:
@@ -61,3 +63,6 @@ with tab_chat:
 
 with tab_events:
     render_event_study()
+
+with tab_health:
+    render_health()

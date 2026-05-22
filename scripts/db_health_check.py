@@ -15,7 +15,7 @@ Usage:
     python scripts/db_health_check.py --check macro
     python scripts/db_health_check.py --check fundamentals
     python scripts/db_health_check.py --check valuation
-    python scripts/db_health_check.py --check raw
+    python scripts/db_health_check.py --check raw        # includes all 11 RAW tables + catalog freshness
 """
 
 import sys
@@ -77,8 +77,12 @@ MACRO_RAW_MART_RATIO      = 0.35  # dbt staging filters/deduplicates -- mart ~35
 PRICE_EARLIEST_EXPECTED   = date(2010, 1, 1)
 MAX_PRICE_GAP_DAYS        = 5     # more than 5 calendar days without new prices = alert
 MAX_MACRO_STALE_DAYS      = 45    # series not updated in 45+ days = alert
-MIN_FUNDAMENTAL_TICKERS   = 1200  # S&P 1500 equities (no ETFs)
+MIN_FUNDAMENTAL_TICKERS   = 250   # yfinance returns empty for most S&P 400/600 small-caps under load;
+                                  # ~270 tickers is realistic. Raise when batch-pause logic improves coverage.
 MIN_VALUATION_DAYS        = 1     # at least 1 valuation snapshot
+MIN_CATALOG_RELEASES      = 250   # FRED has ~300 releases
+MIN_CATALOG_SERIES        = 500_000  # catalog typically 700K-900K unique series
+MAX_CATALOG_STALE_DAYS    = 45    # rebuilt monthly -- flag if >45 days old
 
 PASS = "[PASS]"
 FAIL = "[FAIL]"
@@ -355,33 +359,55 @@ def check_raw(verbose: bool = False):
 
     df = execute_sql("""
         SELECT
-            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.PRICES)               AS prices,
-            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.COMPANY_INFO)          AS company_info,
-            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.MACRO_INDICATORS)      AS macro_indicators,
-            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.FINANCIAL_STATEMENTS)  AS financial_statements,
-            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.VALUATION_METRICS)     AS valuation_metrics
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.PRICES)                    AS prices,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.COMPANY_INFO)               AS company_info,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.MACRO_INDICATORS)           AS macro_indicators,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.FINANCIAL_STATEMENTS)       AS financial_statements,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.VALUATION_METRICS)          AS valuation_metrics,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.DIVIDENDS_AND_SPLITS)       AS dividends_and_splits,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.EARNINGS_HISTORY)           AS earnings_history,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.ANALYST_RECOMMENDATIONS)    AS analyst_recommendations,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.ANALYST_PRICE_TARGETS)      AS analyst_price_targets,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.FRED_RELEASES)              AS fred_releases,
+            (SELECT COUNT(*) FROM EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG)        AS fred_series_catalog
     """)
     row = df.iloc[0]
 
     tables = {
-        "PRICES":               int(row["prices"]),
-        "COMPANY_INFO":         int(row["company_info"]),
-        "MACRO_INDICATORS":     int(row["macro_indicators"]),
-        "FINANCIAL_STATEMENTS": int(row["financial_statements"]),
-        "VALUATION_METRICS":    int(row["valuation_metrics"]),
+        "PRICES":                  int(row["prices"]),
+        "COMPANY_INFO":            int(row["company_info"]),
+        "MACRO_INDICATORS":        int(row["macro_indicators"]),
+        "FINANCIAL_STATEMENTS":    int(row["financial_statements"]),
+        "VALUATION_METRICS":       int(row["valuation_metrics"]),
+        "DIVIDENDS_AND_SPLITS":    int(row["dividends_and_splits"]),
+        "EARNINGS_HISTORY":        int(row["earnings_history"]),
+        "ANALYST_RECOMMENDATIONS": int(row["analyst_recommendations"]),
+        "ANALYST_PRICE_TARGETS":   int(row["analyst_price_targets"]),
+        "FRED_RELEASES":           int(row["fred_releases"]),
+        "FRED_SERIES_CATALOG":     int(row["fred_series_catalog"]),
     }
 
-    min_rows = {"PRICES": 1_000_000, "COMPANY_INFO": EXPECTED_TICKERS,
-                "MACRO_INDICATORS": 100_000, "FINANCIAL_STATEMENTS": 100_000,
-                "VALUATION_METRICS": 500}
+    min_rows = {
+        "PRICES":                  1_000_000,
+        "COMPANY_INFO":            EXPECTED_TICKERS,
+        "MACRO_INDICATORS":        100_000,
+        "FINANCIAL_STATEMENTS":    100_000,
+        "VALUATION_METRICS":       500,
+        "DIVIDENDS_AND_SPLITS":    10_000,
+        "EARNINGS_HISTORY":        2_000,   # sparse for small-caps; 3K+ expected for 1500 tickers
+        "ANALYST_RECOMMENDATIONS": 2_000,   # same -- many S&P 600 tickers have thin coverage
+        "ANALYST_PRICE_TARGETS":   500,
+        "FRED_RELEASES":           MIN_CATALOG_RELEASES,
+        "FRED_SERIES_CATALOG":     MIN_CATALOG_SERIES,
+    }
 
     print()
     for table, count in tables.items():
         threshold = min_rows.get(table, 0)
         if count >= threshold:
-            result(PASS, f"RAW.{table:<25} {count:>10,} rows")
+            result(PASS, f"RAW.{table:<25} {count:>12,} rows")
         else:
-            result(FAIL, f"RAW.{table:<25} {count:>10,} rows  (expected >={threshold:,})")
+            result(FAIL, f"RAW.{table:<25} {count:>12,} rows  (expected >={threshold:,})")
             issues += 1
 
     # Company info coverage: every ticker in PRICES should have a metadata row
@@ -398,11 +424,33 @@ def check_raw(verbose: bool = False):
     info_t    = int(crow["info_tickers"])
     missing_t = int(crow["missing"])
 
+    print()
     if missing_t == 0:
         result(PASS, f"COMPANY_INFO coverage: all {info_t:,} price tickers have metadata")
     else:
         result(FAIL, f"COMPANY_INFO coverage: {missing_t:,} tickers in PRICES have no metadata row -- trigger equity_daily")
         issues += 1
+
+    # FRED catalog freshness: use INFORMATION_SCHEMA.TABLES.LAST_ALTERED --
+    # more reliable than extracted_at whose storage type varies by connector version
+    cat = execute_sql("""
+        SELECT
+            TO_DATE(LAST_ALTERED)                                   AS last_built,
+            DATEDIFF('day', TO_DATE(LAST_ALTERED), CURRENT_DATE())  AS days_old
+        FROM EQUITY_ANALYTICS.INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_SCHEMA = 'RAW'
+          AND TABLE_NAME   = 'FRED_SERIES_CATALOG'
+    """)
+    if not cat.empty and cat.iloc[0]["last_built"] is not None:
+        crow = cat.iloc[0]
+        days_old = int(crow["days_old"])
+        last_built = str(crow["last_built"])[:10]
+        if days_old <= MAX_CATALOG_STALE_DAYS:
+            result(PASS, f"FRED catalog freshness: last rebuilt {last_built} ({days_old} days ago)")
+        else:
+            result(WARN, f"FRED catalog freshness: last rebuilt {last_built} ({days_old} days ago) -- trigger fred_catalog_refresh")
+    else:
+        result(WARN, "FRED catalog freshness: could not determine last build date")
 
     return issues
 

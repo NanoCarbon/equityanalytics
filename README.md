@@ -37,7 +37,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
 | Ingestion | Python + FRED API | 108 macro economic indicators + full FRED series catalog |
-| Orchestration | Apache Airflow 2.9.3 (Docker, local) | Scheduling, retries, observability |
+| Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
 | Quality | dbt tests + GitHub Actions | 25+ automated tests on every PR |
@@ -127,7 +127,7 @@ EQUITY_ANALYTICS
 
 ### Orchestration
 
-Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose (locally or on EC2). The Airflow UI is accessible at `http://localhost:8080`. All DAGs use the TaskFlow API (`@dag` / `@task` decorators) with LocalExecutor.
+Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on Windows. The Airflow UI is accessible at `http://localhost:8080`. All DAGs use the TaskFlow API (`@dag` / `@task` decorators) with LocalExecutor.
 
 ### Airflow DAGs
 
@@ -241,6 +241,8 @@ Two GitHub Actions workflows:
 
 ## Analytics Application
 
+### Analytics App (port 8501)
+
 A Streamlit chat interface powered by Claude accepts natural language prompts, generates Snowflake SQL against the mart layer, executes it, and renders interactive Plotly charts.
 
 **Two-step LLM pipeline:**
@@ -265,6 +267,17 @@ A Streamlit chat interface powered by Claude accepts natural language prompts, g
 - "How has JPM's return on equity changed over time?"
 - "Compare debt-to-equity ratios across bank stocks"
 - "Which stocks have the highest revenue growth?"
+
+### Admin Dashboard (port 8502)
+
+A separate local-only Streamlit app with a Windows 98 Win Forms aesthetic for pipeline operations. Launch via `launch_admin.bat` (or pin to Start via `pin_to_start_menu.ps1`).
+
+- **DAG Monitor** — live run status for all DAGs, pause/unpause toggle, trigger with full-screen confirmation dialog
+- **Log Viewer** — in-app Airflow log tailing directly from the filesystem, with auto-refresh and dark terminal display
+- **Data Quality** — color-coded pass/warn/fail health checks against Snowflake (same checks as `scripts/db_health_check.py`)
+- **Status Bar** — traffic-light dots for Docker, Airflow API, and Snowflake connectivity
+
+The launcher also runs `scripts/db_health_check.py` in the terminal before opening the dashboard, so you get a quick structured summary on startup.
 
 ---
 
@@ -335,6 +348,17 @@ equityanalytics/
 │   │                             #   fact_macro_readings, fact_fundamentals, fact_valuation_snapshot
 │   ├── tests/                    # Singular business rule tests
 │   └── macros/                   # generate_schema_name
+├── admin_dashboard/
+│   ├── app.py                        # Admin Streamlit app entry point (port 8502)
+│   ├── airflow_client.py             # Airflow REST API v1 wrapper
+│   ├── health_check.py               # Structured health checks (returns dicts)
+│   ├── styles/
+│   │   └── winforms.css              # Windows 98 Win Forms aesthetic CSS
+│   └── components/
+│       ├── status_bar.py             # Docker / Airflow / Snowflake status dots
+│       ├── dag_monitor.py            # DAG list, trigger with confirmation, pause/unpause
+│       ├── log_viewer.py             # Airflow log filesystem reader
+│       └── data_quality.py           # Health check results table
 ├── scripts/
 │   └── db_health_check.py            # Reusable DB health check -- run anytime to confirm data quality
 ├── app/
@@ -347,6 +371,8 @@ equityanalytics/
 │   └── workflows/
 │       ├── dbt_ci.yml            # dbt build + test on every PR, prod deploy on merge
 │       └── code_review.yml       # AI code review comment on every PR
+├── launch_admin.bat              # Admin dashboard launcher (docker up + health check + Streamlit)
+├── pin_to_start_menu.ps1         # Creates a Start Menu shortcut for launch_admin.bat
 ├── docker-compose.yml            # Airflow services (webserver, scheduler, init, postgres)
 ├── dbt_project.yml               # dbt project config
 ├── profiles.yml                  # dbt Core connection profile (gitignored)
@@ -378,10 +404,11 @@ SNOWFLAKE_WAREHOUSE=TRANSFORM_WH
 SNOWFLAKE_DATABASE=EQUITY_ANALYTICS
 SNOWFLAKE_SCHEMA=MARTS
 
-AIRFLOW_SECRET_KEY=replace-with-output-of-openssl-rand-hex-32
+# Airflow — used at init (to create the admin user) AND at runtime by the admin dashboard REST API client
 AIRFLOW_ADMIN_USER=admin
 AIRFLOW_ADMIN_EMAIL=you@example.com
 AIRFLOW_ADMIN_PASSWORD=replace-with-strong-password
+AIRFLOW_SECRET_KEY=replace-with-output-of-python-secrets-token-hex-32
 
 ANTHROPIC_API_KEY=your_anthropic_key
 FRED_API_KEY=your_fred_api_key
@@ -389,9 +416,11 @@ FRED_API_KEY=your_fred_api_key
 
 Generate `AIRFLOW_SECRET_KEY` with:
 ```bash
+# Python (cross-platform)
+python -c "import secrets; print(secrets.token_hex(32))"
+
+# Linux/Mac alternative
 openssl rand -hex 32
-# Windows PowerShell alternative:
-# -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Max 256) })
 ```
 
 ### Snowflake Setup

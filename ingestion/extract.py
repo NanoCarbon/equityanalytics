@@ -206,6 +206,10 @@ def extract_prices(
         effective_start = start_date_str
         effective_end = end_date_str
     elif start_date is not None:
+        # Airflow XCom serialises task return values as JSON, so get_max_date()
+        # returns a string ('2026-05-19'). Accept both str and date.
+        if isinstance(start_date, str):
+            start_date = date.fromisoformat(start_date)
         effective_start = (
             datetime.combine(start_date, datetime.min.time()) + timedelta(days=1)
         ).strftime("%Y-%m-%d")
@@ -239,7 +243,22 @@ def extract_prices(
 
     try:
         df = raw.stack(level=0, future_stack=True).reset_index()
-        df.columns = ["date", "ticker", "close", "high", "low", "open", "volume"]
+        # After stack the first two columns are always the date and ticker index
+        # levels (their exact names vary by yfinance version).  Newer yfinance
+        # releases also emit extra columns (e.g. "Dividends", "Capital Gains")
+        # when auto_adjust=True, which breaks a fixed positional rename.
+        # Rename by mapping known names, then select only the OHLCV subset.
+        col_names = list(df.columns)
+        rename_map = {
+            col_names[0]: "date",   # first index level  → date
+            col_names[1]: "ticker", # second index level → ticker
+        }
+        for col in col_names[2:]:
+            col_lower = str(col).lower()
+            if col_lower in ("close", "high", "low", "open", "volume"):
+                rename_map[col] = col_lower
+        df = df.rename(columns=rename_map)
+        df = df[["date", "ticker", "close", "high", "low", "open", "volume"]]
         df = df.dropna(subset=["close"])
         df["extracted_at"] = datetime.utcnow()
     except Exception as e:
@@ -252,12 +271,19 @@ def extract_prices(
 
 def extract_company_info(
     tickers: List[str],
-    delay_seconds: float = 2.0
+    delay_seconds: float = 2.0,
+    batch_size: int = 100,
+    batch_pause: float = 30.0,
 ) -> pd.DataFrame:
     """
     Extract company metadata from yfinance with rate limiting.
     Each ticker requires a separate API call so we add a delay.
     Per-ticker failures are caught and filled with nulls so the batch continues.
+
+    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
+    tickers. equity_daily and valuation_daily both fire at 11pm ET and both hit
+    the .info endpoint — without batch pauses Yahoo Finance silently throttles
+    after ~270 tickers (same failure mode seen in financial statements).
     """
     records = []
     total = len(tickers)
@@ -287,8 +313,14 @@ def extract_company_info(
         if i % 50 == 0:
             logger.info("Metadata progress: %d/%d tickers", i, total)
 
+        # Per-ticker delay
         if i < total:
             time.sleep(delay_seconds)
+
+        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
+        if i % batch_size == 0 and i < total:
+            logger.info("Batch pause %ds after %d tickers...", batch_pause, i)
+            time.sleep(batch_pause)
 
     logger.info("Extracted metadata for %d tickers", len(records))
     return pd.DataFrame(records)
@@ -297,11 +329,18 @@ def extract_company_info(
 def extract_dividends_and_splits(
     tickers: List[str],
     delay_seconds: float = 0.5,
+    batch_size: int = 150,
+    batch_pause: float = 15.0,
 ) -> pd.DataFrame:
     """
     Extract full dividend and stock split history for all tickers.
     yfinance returns history back to IPO — this is a full overwrite source.
     Per-ticker failures are skipped so the batch continues.
+
+    Rate-limited with per-ticker delay plus a batch pause every `batch_size`
+    tickers. equity_supplemental_weekly runs four tasks in parallel (dividends,
+    earnings, recommendations, price targets) — batch pauses prevent sustained
+    high-volume load from triggering Yahoo Finance's silent throttle.
     """
     records = []
     total = len(tickers)
@@ -322,6 +361,9 @@ def extract_dividends_and_splits(
             logger.info("Dividends/splits progress: %d/%d", i, total)
         if i < total:
             time.sleep(delay_seconds)
+        if i % batch_size == 0 and i < total:
+            logger.info("Batch pause %ds after %d tickers (dividends)...", batch_pause, i)
+            time.sleep(batch_pause)
 
     if not records:
         logger.warning("No dividend/split data returned for any ticker")
@@ -338,6 +380,8 @@ def extract_dividends_and_splits(
 def extract_earnings_history(
     tickers: List[str],
     delay_seconds: float = 0.5,
+    batch_size: int = 150,
+    batch_pause: float = 15.0,
 ) -> pd.DataFrame:
     """
     Extract EPS actuals vs. analyst estimates history from yfinance.
@@ -362,6 +406,9 @@ def extract_earnings_history(
             logger.info("Earnings history progress: %d/%d", i, total)
         if i < total:
             time.sleep(delay_seconds)
+        if i % batch_size == 0 and i < total:
+            logger.info("Batch pause %ds after %d tickers (earnings)...", batch_pause, i)
+            time.sleep(batch_pause)
 
     if not records:
         logger.warning("No earnings history returned for any ticker")
@@ -378,6 +425,8 @@ def extract_earnings_history(
 def extract_analyst_recommendations(
     tickers: List[str],
     delay_seconds: float = 0.5,
+    batch_size: int = 150,
+    batch_pause: float = 15.0,
 ) -> pd.DataFrame:
     """
     Extract analyst firm upgrade/downgrade history (Buy / Hold / Sell ratings).
@@ -402,6 +451,9 @@ def extract_analyst_recommendations(
             logger.info("Recommendations progress: %d/%d", i, total)
         if i < total:
             time.sleep(delay_seconds)
+        if i % batch_size == 0 and i < total:
+            logger.info("Batch pause %ds after %d tickers (recommendations)...", batch_pause, i)
+            time.sleep(batch_pause)
 
     if not records:
         logger.warning("No analyst recommendations returned for any ticker")
@@ -418,6 +470,8 @@ def extract_analyst_recommendations(
 def extract_analyst_price_targets(
     tickers: List[str],
     delay_seconds: float = 0.5,
+    batch_size: int = 150,
+    batch_pause: float = 15.0,
 ) -> pd.DataFrame:
     """
     Extract current analyst price target consensus (mean, high, low, count).
@@ -453,6 +507,9 @@ def extract_analyst_price_targets(
             logger.info("Price targets progress: %d/%d", i, total)
         if i < total:
             time.sleep(delay_seconds)
+        if i % batch_size == 0 and i < total:
+            logger.info("Batch pause %ds after %d tickers (price targets)...", batch_pause, i)
+            time.sleep(batch_pause)
 
     if not records:
         logger.warning("No analyst price targets returned for any ticker")

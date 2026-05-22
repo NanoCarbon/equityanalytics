@@ -18,22 +18,51 @@ def _load_private_key() -> bytes:
     Load the RSA private key and return DER bytes for the Snowflake connector.
     Key-pair auth never expires — no more manual token rotation.
 
-    Reads:
-        SNOWFLAKE_PRIVATE_KEY_PATH       path to .pem file (default: snowflake_private_key.pem)
-        SNOWFLAKE_PRIVATE_KEY_PASSPHRASE passphrase if the key is encrypted (optional)
+    Two auth modes, tried in order:
+
+    1. SNOWFLAKE_PRIVATE_KEY  — PEM content as a string (Streamlit Community Cloud
+       pattern: store the full key in st.secrets / the Cloud secrets manager).
+       Use this when deploying to Community Cloud so no .pem file is needed.
+
+    2. SNOWFLAKE_PRIVATE_KEY_PATH — path to a .pem file on disk (default:
+       snowflake_private_key.pem). Use this for local development.
+
+    Optional:
+        SNOWFLAKE_PRIVATE_KEY_PASSPHRASE — passphrase if the key is encrypted.
     """
-    key_path = os.environ.get(
-        "SNOWFLAKE_PRIVATE_KEY_PATH", "snowflake_private_key.pem"
-    )
     passphrase_str = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
     passphrase = passphrase_str.encode() if passphrase_str else None
 
-    if not os.path.exists(key_path):
-        raise FileNotFoundError(
-            f"Snowflake private key not found at '{key_path}'. "
-            "Set SNOWFLAKE_PRIVATE_KEY_PATH in your .env or place the key file there."
+    # ── Mode 1: key content from env / st.secrets (Community Cloud) ──────────
+    key_content = os.environ.get("SNOWFLAKE_PRIVATE_KEY")
+    if key_content:
+        try:
+            p_key = serialization.load_pem_private_key(
+                key_content.strip().encode(),
+                password=passphrase,
+                backend=default_backend(),
+            )
+        except (ValueError, TypeError) as e:
+            raise RuntimeError(
+                "Failed to parse SNOWFLAKE_PRIVATE_KEY env var as a PEM key. "
+                "Ensure the full key including headers is stored in the secret, "
+                "and that SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is set if encrypted. "
+                f"Original error: {e}"
+            ) from e
+        return p_key.private_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
         )
 
+    # ── Mode 2: key file on disk (local development) ──────────────────────────
+    key_path = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH", "snowflake_private_key.pem")
+    if not os.path.exists(key_path):
+        raise FileNotFoundError(
+            f"Snowflake private key not found. "
+            "For local dev: set SNOWFLAKE_PRIVATE_KEY_PATH in .env pointing to a .pem file. "
+            "For Community Cloud: set SNOWFLAKE_PRIVATE_KEY in st.secrets with the full PEM content."
+        )
     try:
         with open(key_path, "rb") as f:
             p_key = serialization.load_pem_private_key(
