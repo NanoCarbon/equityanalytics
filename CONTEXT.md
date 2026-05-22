@@ -4,8 +4,7 @@
 - Python + yfinance + Apache Airflow 2.9.3 on **local Docker** (ingestion + orchestration)
 - Snowflake (warehouse) — account: QYCMQJK-HTC96121, user: DBT_USER
 - dbt Core (transformation) — `profiles.yml` at repo root reads from env vars
-- Streamlit + Claude API (analytics chat app on port 8501) — deployed to Streamlit Community Cloud
-- Streamlit (admin dashboard on port 8502) — local only, launched via `launch_admin.bat`
+- Streamlit + Claude API (analytics app on port 8501) — currently local, planned for Community Cloud
 - GitHub Actions (CI/CD + AI code review)
 
 ## Infrastructure
@@ -93,26 +92,34 @@ Trigger a DAG manually (run from the repo root on Windows):
 docker compose exec airflow-webserver airflow dags trigger <dag_id>
 ```
 
-## Admin dashboard
+## Streamlit app — DB Health tab
 
-A separate local-only Streamlit app (`admin_dashboard/app.py`) runs on port 8502. It is NOT the public analytics app.
+The main Streamlit app (`app/streamlit_app.py`, port 8501) has four tabs:
+- **01 · Overview** — portfolio-level market summary
+- **02 · AI Analytics** — Claude-powered natural language SQL + Plotly charts
+- **03 · Event Study** — price reaction analysis around corporate events
+- **04 · DB Health** — pipeline health checks (gated, local only by default)
 
-**Launch:** double-click `launch_admin.bat` or pin it to Start via `pin_to_start_menu.ps1`.
+**Launch:** double-click `launch_admin.bat` or pin to Start via `pin_to_start_menu.ps1`.
 
 `launch_admin.bat` does four things in sequence:
 1. `docker compose up -d` — ensures containers are running
 2. Polls `http://localhost:8080/health` (24 × 5s) — waits for Airflow webserver
-3. Runs `scripts/db_health_check.py` — prints structured health summary
-4. `streamlit run admin_dashboard/app.py --server.port 8502` — opens the dashboard
+3. Runs `scripts/db_health_check.py` — prints structured health summary to terminal
+4. `streamlit run app/streamlit_app.py --server.port 8501` — opens the app
 
-**Admin dashboard components:**
-- `admin_dashboard/airflow_client.py` — thin Airflow REST API v1 wrapper; reads `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` from env
-- `admin_dashboard/health_check.py` — structured health checks (same logic as `scripts/db_health_check.py` but returns dicts)
-- `admin_dashboard/styles/winforms.css` — Windows 98 Win Forms aesthetic (gray `#d4d0c8` background, inset borders, raised buttons)
-- `admin_dashboard/components/status_bar.py` — Docker / Airflow / Snowflake traffic-light status dots
-- `admin_dashboard/components/dag_monitor.py` — DAG list, last run state, pause/unpause toggle, trigger with confirmation dialog
-- `admin_dashboard/components/log_viewer.py` — reads Airflow logs from filesystem (handles Windows Unicode colon U+F03A in path names)
-- `admin_dashboard/components/data_quality.py` — color-coded pass/warn/fail health check table
+**DB Health tab security model** (`app/components/db_health.py`):
+
+| Env var | Local `.env` | Community Cloud |
+|---|---|---|
+| `HEALTH_TAB_ENABLED` | `true` | leave unset (hides content) or `true` + password |
+| `HEALTH_CHECK_PASSWORD` | optional | recommended if tab is enabled |
+| `IS_LOCAL` | `true` | leave unset (suppresses Docker/Airflow subprocess calls) |
+
+- All Snowflake queries go through `execute_sql_cached` — no separate auth surface
+- Docker/Airflow status only runs when `IS_LOCAL=true` (localhost calls are meaningless and a shell risk in cloud)
+- Password gate uses `os.environ.get()` — works with both `.env` (local) and `st.secrets` (Community Cloud)
+- `_load_private_key()` in `app/db/snowflake.py` supports both `SNOWFLAKE_PRIVATE_KEY` (PEM string for Community Cloud) and `SNOWFLAKE_PRIVATE_KEY_PATH` (file path for local dev)
 
 **Airflow REST API — auth reference (read this before debugging 403s):**
 
@@ -240,23 +247,21 @@ dbt build --profiles-dir .
   - `app/db/snowflake.py` and `ingestion/load.py` both use `_load_private_key()` helper
   - Key-pair auth never expires — no token rotation needed
 - dbt: same RSA key via `profiles.yml` (`private_key_path` field) — profiles.yml is gitignored
-- Airflow: credentials and secret key in `.env` — see "Airflow REST API — auth reference" in the Admin dashboard section above for full troubleshooting
+- Airflow: credentials and secret key in `.env` — see "Airflow REST API — auth reference" in the Streamlit app section above for full troubleshooting
   - `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` (currently admin/admin) — used at init AND by the admin dashboard REST API client
   - `AIRFLOW_SECRET_KEY` — signs sessions; generated with `python -c "import secrets; print(secrets.token_hex(32))"`
   - `AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,...'` — set in `docker-compose.yml` (not `.env`); required for REST API basic auth to work; only takes effect after `docker compose up -d`, NOT `docker compose restart`
 - GitHub Actions secrets: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY, ANTHROPIC_API_KEY
 
 ## Key files
-- launch_admin.bat — local admin launcher: docker up → Airflow health check → db_health_check → Streamlit on port 8502
+- launch_admin.bat — launcher: docker up → Airflow health wait → db_health_check → Streamlit on port 8501
 - pin_to_start_menu.ps1 — creates a Start Menu shortcut for launch_admin.bat (run once elevated)
-- admin_dashboard/app.py — admin Streamlit app entry point (port 8502, Win Forms aesthetic)
-- admin_dashboard/airflow_client.py — Airflow REST API v1 wrapper
-- admin_dashboard/health_check.py — structured health checks returning dicts
-- admin_dashboard/styles/winforms.css — Windows 98 Win Forms CSS
-- admin_dashboard/components/status_bar.py — system status dots (Docker/Airflow/Snowflake)
-- admin_dashboard/components/dag_monitor.py — DAG list, trigger with confirmation, pause/unpause
-- admin_dashboard/components/log_viewer.py — Airflow log filesystem reader (handles Unicode colon U+F03A)
-- admin_dashboard/components/data_quality.py — health check results table
+- app/streamlit_app.py — main Streamlit app entry point (port 8501, four tabs)
+- app/components/db_health.py — DB Health tab: Snowflake checks + infra status; security-gated
+- app/components/overview.py — Overview tab
+- app/components/chat.py — AI Analytics tab (Claude + Snowflake SQL)
+- app/components/event_study.py — Event Study tab
+- app/db/snowflake.py — Snowflake connection, execute_sql_cached, _load_private_key (supports PEM string for Community Cloud)
 - ingestion/extract.py — yfinance: prices, company info, dividends, earnings, analyst data
   - get_sp500_tickers() / get_sp400_tickers() / get_sp600_tickers() — live Wikipedia scrapers
   - get_all_tickers() — full universe (S&P 1500 + ETFs, ~1,619)

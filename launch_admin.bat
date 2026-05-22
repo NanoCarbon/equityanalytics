@@ -1,20 +1,21 @@
 @echo off
 setlocal EnableDelayedExpansion
-title Equity Analytics Admin Launcher
+title Equity Analytics Launcher
 
 cd /d "%~dp0"
 
 :: ─────────────────────────────────────────────────────────────────────────────
-::  EQUITY ANALYTICS — ADMIN LAUNCHER
+::  EQUITY ANALYTICS — LAUNCHER
 ::  1) Ensure Docker containers are up
 ::  2) Wait for Airflow to be healthy
-::  3) Run db_health_check and display colourised summary
-::  4) Launch Streamlit admin dashboard on port 8502
+::  3) Run db_health_check and display summary in terminal
+::  4) Launch main Streamlit app on port 8501
+::     (DB Health tab is available inside the app under "04 · DB Health")
 :: ─────────────────────────────────────────────────────────────────────────────
 
 echo.
 echo ============================================================
-echo   EQUITY ANALYTICS ADMIN LAUNCHER
+echo   EQUITY ANALYTICS LAUNCHER
 echo ============================================================
 echo.
 
@@ -42,7 +43,7 @@ if %ERRORLEVEL% EQU 0 (
 )
 if %TRIES% GEQ %MAX_TRIES% (
     echo   WARNING: Airflow did not respond after %MAX_TRIES% attempts.
-    echo   The dashboard will still open but DAG data may be unavailable.
+    echo   The app will still open but Airflow UI may be unavailable.
     goto AIRFLOW_READY
 )
 echo   Attempt %TRIES%/%MAX_TRIES% — waiting 5s...
@@ -69,12 +70,14 @@ if %HEALTH_EXIT% EQU 0 (
 
 :: ── 4. Launch Streamlit ──────────────────────────────────────────────────────
 echo.
-echo [4/4] Launching Admin Dashboard on http://localhost:8502 ...
-echo   Close this window to stop the dashboard.
+echo [4/4] Launching Equity Analytics on http://localhost:8501 ...
+echo   DB Health tab is available inside the app (04 . DB Health).
+echo   Airflow UI: http://localhost:8080
+echo   Close this window to stop the app.
 echo.
 
-streamlit run admin_dashboard\app.py ^
-    --server.port 8502 ^
+streamlit run app\streamlit_app.py ^
+    --server.port 8501 ^
     --server.headless false ^
     --browser.gatherUsageStats false ^
     --theme.base light
