@@ -50,32 +50,30 @@ CREATE OR REPLACE VIEW EQUITY_ANALYTICS.RAW.VW_FRED_HYGIENE AS
 /*
   FRED Series Hygiene View
   ========================
-  One row per FRED series. Shows the two most-recent observation dates and
-  cumulative distinct-observation counts, enabling quick answers to:
-
-    - Is this series being updated?   → LATEST_DATE should be recent
-    - How deep is the history?        → LATEST_ROWS (distinct obs dates)
-    - Was the last run incremental?   → LATEST_ROWS - PREV_ROWS = 1 for a
-                                         normal daily run; > 1 = backfill /
-                                         gap catch-up
+  One row per FRED series showing the two most-recent observation dates
+  and the raw table row count ON each of those dates.
 
   Column semantics
   ----------------
   FRED_SERIES_ID   : FRED series identifier (e.g. 'UNRATE', 'DGS10')
   FRED_SERIES_NAME : Human-readable name as stored at extraction time
-  LATEST_DATE      : Most recent observation date in RAW.MACRO_INDICATORS
-  LATEST_ROWS      : Count of DISTINCT observation dates for this series
-                     (not raw table rows — deduped to avoid inflation from
-                     the 7-day rolling re-extract in macro_daily)
-  PREV_DATE        : Second-most-recent observation date
-  PREV_ROWS        : LATEST_ROWS - 1 (count before the latest obs was added)
+  LATEST_DATE      : Most recent observation date for this series
+  LATEST_ROWS      : Rows in RAW.MACRO_INDICATORS for series + LATEST_DATE.
+                     Healthy = 1. > 1 means that date was ingested more
+                     than once (re-extraction duplicate — safe but wasteful).
+  PREV_DATE        : Second-most-recent observation date.
+                     Gap vs LATEST_DATE reveals expected frequency
+                     (daily / weekly / monthly / quarterly).
+  PREV_ROWS        : Rows in RAW.MACRO_INDICATORS for series + PREV_DATE.
+                     Also should be 1; > 1 flags the same duplicate issue.
 */
-WITH deduped AS (
-    -- One row per series + observation date; collapse re-extraction duplicates
+WITH obs_dates AS (
+    -- Resolve epoch-nanosecond date column to a proper DATE, keep raw row count
     SELECT
         series_id,
-        MAX(series_name)                                             AS series_name,
-        TO_DATE(DATEADD(second, date / 1000000000, '1970-01-01'))   AS obs_date
+        MAX(series_name)                                            AS series_name,
+        TO_DATE(DATEADD(second, date / 1000000000, '1970-01-01'))  AS obs_date,
+        COUNT(*)                                                    AS row_count
     FROM EQUITY_ANALYTICS.RAW.MACRO_INDICATORS
     GROUP BY series_id, date
 ),
@@ -84,17 +82,17 @@ ranked AS (
         series_id,
         series_name,
         obs_date,
-        ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY obs_date DESC)  AS rn,
-        COUNT(*)     OVER (PARTITION BY series_id)                          AS total_obs
-    FROM deduped
+        row_count,
+        ROW_NUMBER() OVER (PARTITION BY series_id ORDER BY obs_date DESC) AS rn
+    FROM obs_dates
 )
 SELECT
-    r1.series_id                  AS FRED_SERIES_ID,
-    r1.series_name                AS FRED_SERIES_NAME,
-    r1.obs_date                   AS LATEST_DATE,
-    r1.total_obs                  AS LATEST_ROWS,
-    r2.obs_date                   AS PREV_DATE,
-    GREATEST(r1.total_obs - 1, 0) AS PREV_ROWS
+    r1.series_id   AS FRED_SERIES_ID,
+    r1.series_name AS FRED_SERIES_NAME,
+    r1.obs_date    AS LATEST_DATE,
+    r1.row_count   AS LATEST_ROWS,
+    r2.obs_date    AS PREV_DATE,
+    r2.row_count   AS PREV_ROWS
 FROM ranked r1
 LEFT JOIN ranked r2
     ON  r1.series_id = r2.series_id
