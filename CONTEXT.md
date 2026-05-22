@@ -114,9 +114,41 @@ A separate local-only Streamlit app (`admin_dashboard/app.py`) runs on port 8502
 - `admin_dashboard/components/log_viewer.py` — reads Airflow logs from filesystem (handles Windows Unicode colon U+F03A in path names)
 - `admin_dashboard/components/data_quality.py` — color-coded pass/warn/fail health check table
 
-**Airflow REST API note:** The admin dashboard calls the Airflow REST API which requires valid credentials. If the API returns 403 on all endpoints except `/version`, the admin user may not have been created yet. Fix:
+**Airflow REST API — auth reference (read this before debugging 403s):**
+
+The REST API base URL is `http://localhost:8080/api/v1`. Credentials are `admin:admin` (set in `.env`).
+
+Three things must ALL be true for the API to work:
+1. `AIRFLOW__API__AUTH_BACKENDS` includes `basic_auth` — set in `docker-compose.yml` under `x-airflow-common` environment block. **This env var only takes effect after `docker compose up -d` (full recreate), NOT after `docker compose restart`.**
+2. The admin user exists in the Airflow metadata DB.
+3. The admin role has the correct FAB permissions.
+
+**Quick auth test (PowerShell):**
 ```powershell
-docker compose exec airflow-webserver airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin
+$h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:admin")) }
+Invoke-RestMethod "http://localhost:8080/api/v1/dags" -Headers $h | Select-Object total_entries
+```
+Expected: `total_entries: 9`. Any other result → see troubleshooting below.
+
+**Troubleshooting by symptom:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Connection refused / closed unexpectedly | Webserver not up yet or stale PID file | Wait 30s; if still failing: `docker compose exec airflow-webserver rm -f /opt/airflow/airflow-webserver.pid` then `docker compose up -d airflow-webserver` |
+| 403 on ALL endpoints incl. `/dags` | `basic_auth` backend not active | `docker compose up -d airflow-webserver` (must recreate, not just restart) |
+| 403 after confirming basic_auth is set | Admin user missing or FAB perms stale | Run both: `docker compose exec airflow-webserver airflow users list` to confirm user exists, then `docker compose exec airflow-webserver airflow sync-perm` |
+| 200 on `/version` but 403 on `/dags` | Same as above — `/version` is public, `/dags` requires auth | Same fix as above |
+| "No data found" from `airflow users list` | DB wiped (volume reset) — user was never created | `docker compose exec airflow-webserver airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin` |
+| Auth worked before, now broken after webserver restart | `docker compose restart` doesn't reload env vars | Always use `docker compose up -d <service>` to pick up env var changes |
+
+**Trigger a DAG (no REST API needed — use CLI directly):**
+```powershell
+docker compose exec airflow-webserver airflow dags trigger <dag_id>
+```
+
+**Check task states for a run:**
+```powershell
+docker compose exec airflow-webserver airflow tasks states-for-dag-run <dag_id> <run_id>
 ```
 
 ## Key ingestion behaviors
@@ -208,10 +240,10 @@ dbt build --profiles-dir .
   - `app/db/snowflake.py` and `ingestion/load.py` both use `_load_private_key()` helper
   - Key-pair auth never expires — no token rotation needed
 - dbt: same RSA key via `profiles.yml` (`private_key_path` field) — profiles.yml is gitignored
-- Airflow: `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` / `AIRFLOW_SECRET_KEY` in `.env`
-  - `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` used at `airflow-init` to create the admin user AND at runtime by the admin dashboard REST API client
-  - `AIRFLOW_SECRET_KEY` signs Airflow sessions — if blank, Airflow warns on every startup and REST API auth may behave unexpectedly
-  - If the Airflow user is ever lost (e.g. metadata DB reset), recreate: `docker compose exec airflow-webserver airflow users create ...`
+- Airflow: credentials and secret key in `.env` — see "Airflow REST API — auth reference" in the Admin dashboard section above for full troubleshooting
+  - `AIRFLOW_ADMIN_USER` / `AIRFLOW_ADMIN_PASSWORD` (currently admin/admin) — used at init AND by the admin dashboard REST API client
+  - `AIRFLOW_SECRET_KEY` — signs sessions; generated with `python -c "import secrets; print(secrets.token_hex(32))"`
+  - `AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,...'` — set in `docker-compose.yml` (not `.env`); required for REST API basic auth to work; only takes effect after `docker compose up -d`, NOT `docker compose restart`
 - GitHub Actions secrets: SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_PRIVATE_KEY, ANTHROPIC_API_KEY
 
 ## Key files
