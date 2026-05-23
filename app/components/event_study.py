@@ -31,7 +31,7 @@ def render_event_study():
         threshold = st.number_input("Threshold (X)", min_value=0.1, max_value=50.0, value=3.0, step=0.5)
 
     if st.button("Run Event Study", type="primary"):
-        if not re.match(r'^[A-Z0-9\-]{1,10}$', ticker):
+        if not re.fullmatch(r'[A-Z0-9\-]{1,10}', ticker):
             st.error("Invalid ticker. Use letters, numbers, and hyphens only (e.g. AAPL, BRK-B).")
             st.stop()
 

@@ -80,7 +80,9 @@ def fred_catalog_refresh():
         from ingestion.extract_fred_catalog import extract_fred_catalog
         from ingestion.load import load_dataframe
 
-        api_key = os.environ["FRED_API_KEY"]
+        api_key = os.environ.get("FRED_API_KEY")
+        if not api_key:
+            raise ValueError("FRED_API_KEY environment variable is required but not set")
 
         logger.info("Starting FRED catalog crawl...")
         releases_df, catalog_df = extract_fred_catalog(api_key)
