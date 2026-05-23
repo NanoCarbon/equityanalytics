@@ -1,8 +1,19 @@
+import time
 import requests
 import pandas as pd
 import logging
 from datetime import datetime, timedelta
 from typing import List
+
+
+class _RateLimitError(Exception):
+    """Raised when FRED API returns HTTP 429 — signals the caller to back off."""
+
+
+_DELAY_BASE    = 0.5   # seconds between series requests
+_DELAY_MAX     = 30.0  # cap on backed-off delay
+_BACKOFF_FACTOR = 2.0  # multiply delay on 429
+_RECOVER_FACTOR = 0.9  # multiply delay on each successful fetch (gradual reduction)
 
 logger = logging.getLogger(__name__)
 
@@ -162,6 +173,10 @@ def extract_fred_series(
     try:
         response = requests.get(FRED_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
 
+        if response.status_code == 429:
+            logger.warning("FRED rate limit (429) for %s", series_id)
+            raise _RateLimitError(series_id)
+
         if response.status_code == 400:
             logger.warning("Skipping %s — invalid series ID (400)", series_id)
             return pd.DataFrame()
@@ -185,6 +200,8 @@ def extract_fred_series(
 
         return df[["series_id", "series_name", "date", "value", "extracted_at"]]
 
+    except _RateLimitError:
+        raise  # propagate for caller's backoff loop
     except requests.Timeout:
         logger.warning("FRED request timed out for %s after %ds", series_id, HTTP_TIMEOUT)
         return None  # Network failure — signals circuit breaker
@@ -205,10 +222,20 @@ def extract_all_fred_series(
     frames = []
     skipped = 0
     consecutive_failures = 0
+    delay = _DELAY_BASE
 
     for series_id in FRED_SERIES:
-        logger.info("Fetching %s...", series_id)
-        result = extract_fred_series(api_key, series_id, start_date, lookback_days)
+        logger.info("Fetching %s... (delay=%.2fs)", series_id, delay)
+
+        # Retry loop: only retries on 429; all other outcomes exit immediately.
+        while True:
+            try:
+                result = extract_fred_series(api_key, series_id, start_date, lookback_days)
+                break
+            except _RateLimitError:
+                delay = min(delay * _BACKOFF_FACTOR, _DELAY_MAX)
+                logger.warning("Rate limited — sleeping %.1fs before retry", delay)
+                time.sleep(delay)
 
         if result is None:
             consecutive_failures += 1
@@ -223,8 +250,11 @@ def extract_all_fred_series(
             consecutive_failures = 0
             if not result.empty:
                 frames.append(result)
+                delay = max(_DELAY_BASE, delay * _RECOVER_FACTOR)
             else:
                 skipped += 1
+
+        time.sleep(delay)
 
     logger.info(
         "FRED extraction complete: %d series fetched, %d skipped/empty",

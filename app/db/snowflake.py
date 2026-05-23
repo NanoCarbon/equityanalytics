@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import logging
 import streamlit as st
@@ -27,6 +28,24 @@ def get_snowflake_connection():
     )
 
 
+_READ_ONLY_START = re.compile(r'^\s*(SELECT|WITH)\b', re.IGNORECASE)
+_WRITE_KEYWORDS  = re.compile(
+    r'\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|MERGE|REPLACE|GRANT|REVOKE|EXECUTE|CALL)\b',
+    re.IGNORECASE,
+)
+
+
+def _assert_read_only(sql: str) -> None:
+    """Raise ValueError if sql contains write operations."""
+    # Strip comments before checking keywords
+    stripped = re.sub(r'--[^\n]*', '', sql)
+    stripped = re.sub(r'/\*.*?\*/', '', stripped, flags=re.DOTALL).strip()
+    if not _READ_ONLY_START.match(stripped):
+        raise ValueError("Only SELECT queries are permitted in this interface.")
+    if _WRITE_KEYWORDS.search(stripped):
+        raise ValueError("Write operations are not permitted in this interface.")
+
+
 def _clean_sql(sql: str) -> str:
     """
     Strip trailing semicolons and whitespace.
@@ -49,6 +68,7 @@ def _clean_sql(sql: str) -> str:
 def _run_query(conn, sql: str) -> pd.DataFrame:
     """Execute SQL against an open connection and return a DataFrame."""
     sql = _clean_sql(sql)
+    _assert_read_only(sql)
     start = time.monotonic()
     cursor = conn.cursor()
     cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 30")

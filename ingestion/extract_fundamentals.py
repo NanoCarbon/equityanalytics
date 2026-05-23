@@ -24,6 +24,10 @@ import time
 from datetime import datetime
 from typing import List
 
+_DELAY_MAX      = 30.0  # cap on backed-off delay
+_BACKOFF_FACTOR = 2.0   # multiply delay on ticker failure
+_RECOVER_FACTOR = 0.9   # multiply delay on each success (gradual reduction)
+
 
 # ── Financial statement extraction ────────────────────────────────────────────
 
@@ -97,6 +101,7 @@ def extract_financial_statements(
     total = len(tickers)
     extracted_at = datetime.utcnow()
     skipped = []
+    delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
@@ -117,12 +122,15 @@ def extract_financial_statements(
             if i % 25 == 0:
                 print(f"  Fundamentals progress: {i}/{total} tickers")
 
+            delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
+
         except Exception as e:
             print(f"Warning: could not process {ticker}: {e}")
             skipped.append(ticker)
+            delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(delay)
 
     if skipped:
         print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
@@ -205,6 +213,7 @@ def extract_valuation_metrics(
     snapshot_date = datetime.utcnow().date()
     extracted_at = datetime.utcnow()
     skipped = []
+    delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
@@ -227,6 +236,8 @@ def extract_valuation_metrics(
             if i % 25 == 0:
                 print(f"  Valuation progress: {i}/{total} tickers")
 
+            delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
+
         except Exception as e:
             print(f"Warning: could not fetch valuation for {ticker}: {e}")
             skipped.append(ticker)
@@ -236,9 +247,10 @@ def extract_valuation_metrics(
                 **{field: None for field in VALUATION_FIELDS},
                 "extracted_at": extracted_at,
             })
+            delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(delay)
 
     if skipped:
         print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")

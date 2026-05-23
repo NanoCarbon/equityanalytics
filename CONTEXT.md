@@ -122,11 +122,15 @@ python -c "from dotenv import load_dotenv; load_dotenv(); from ingestion.pipelin
 - PRs blocked from merging if any dbt model or test fails
 
 ## Security fixes applied (branch: fix/critical-issues)
-- `ingestion/load.py` — added `_validate_table_name()` whitelist (frozenset) to prevent SQL injection in `get_max_date` / `get_min_date`
-- `dbt_project/models/staging/stg_valuation_metrics.sql` — replaced all `CAST` with `TRY_CAST` for numeric columns to handle yfinance string sentinels ('N/A', 'Infinity')
-- `ingestion/extract_fundamentals.py` — lowered sentinel value cap from `1e18` to `1e15` (no financial metric exceeds $1 quadrillion)
-- `ingestion/extract_fred.py` — added circuit breaker: `extract_fred_series` returns `None` for network failures; `extract_all_fred_series` aborts after 5 consecutive `None` returns
-- `app/components/event_study.py` — changed `re.match` to `re.fullmatch` for ticker validation (ticker is interpolated directly into SQL)
+- `ingestion/load.py` — `_validate_table_name()` whitelist (frozenset) prevents SQL injection in `get_max_date` / `get_min_date`
+- `dbt_project/models/staging/stg_valuation_metrics.sql` — all `CAST` → `TRY_CAST` for numeric columns; handles yfinance string sentinels ('N/A', 'Infinity')
+- `ingestion/extract_fundamentals.py` — sentinel value cap `1e18` → `1e15`; adaptive backoff on both `extract_financial_statements` and `extract_valuation_metrics`
+- `ingestion/extract_fred.py` — circuit breaker (abort after 5 consecutive network failures); `_RateLimitError` on HTTP 429 with exponential backoff retry; adaptive delay between requests
+- `app/components/event_study.py` — `re.match` → `re.fullmatch` for ticker validation
+- `docker-compose.yml` — all hardcoded credentials removed, parameterized via env vars; `.env.example` updated with Airflow vars and rotation warning
+- `app/db/snowflake.py` — `_assert_read_only()` blocks write SQL (INSERT/UPDATE/DELETE/DROP/etc.) on every query execution
+- `dbt_project/tests/assert_fundamentals_revenue_not_null.sql` — canary test: asserts AAPL annual `total_revenue` is not null; detects yfinance field renames
+- `airflow/dags/dag_fred_catalog.py` (fred-series-expansion) — explicit `ValueError` when `FRED_API_KEY` env var is missing
 
 ## Known issues / decisions made
 - Snowflake free trial: $20/month after 30 days — set calendar reminder before expiry
