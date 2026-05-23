@@ -25,6 +25,10 @@ import time
 from datetime import datetime
 from typing import List
 
+_DELAY_MAX      = 30.0
+_BACKOFF_FACTOR = 2.0
+_RECOVER_FACTOR = 0.9
+
 
 # ── Financial statement extraction ────────────────────────────────────────────
 
@@ -104,6 +108,7 @@ def extract_financial_statements(
     extracted_at = datetime.utcnow()
     skipped = []
     tickers_with_data = 0
+    delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
@@ -129,13 +134,16 @@ def extract_financial_statements(
             if i % 25 == 0:
                 print(f"  Fundamentals progress: {i}/{total} tickers ({tickers_with_data} with data so far)")
 
+            delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
+
         except Exception as e:
             print(f"Warning: could not process {ticker}: {e}")
             skipped.append(ticker)
+            delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         # Per-ticker delay
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(delay)
 
         # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
         if i % batch_size == 0 and i < total:
@@ -230,6 +238,7 @@ def extract_valuation_metrics(
     snapshot_date = datetime.utcnow().date()
     extracted_at = datetime.utcnow()
     skipped = []
+    delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
@@ -250,7 +259,7 @@ def extract_valuation_metrics(
                         except (ValueError, TypeError):
                             value = None
                     if isinstance(value, (int, float)):
-                        if not math.isfinite(float(value)) or abs(value) > 1e18:
+                        if not math.isfinite(float(value)) or abs(value) > 1e15:
                             value = None
                 row[field] = value
 
@@ -259,6 +268,8 @@ def extract_valuation_metrics(
 
             if i % 25 == 0:
                 print(f"  Valuation progress: {i}/{total} tickers")
+
+            delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
 
         except Exception as e:
             print(f"Warning: could not fetch valuation for {ticker}: {e}")
@@ -269,10 +280,11 @@ def extract_valuation_metrics(
                 **{field: None for field in VALUATION_FIELDS},
                 "extracted_at": extracted_at,
             })
+            delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         # Per-ticker delay
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(delay)
 
         # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
         if i % batch_size == 0 and i < total:

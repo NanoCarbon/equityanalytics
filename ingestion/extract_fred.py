@@ -11,8 +11,16 @@ FRED_BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 # Timeout for FRED API calls (seconds)
 HTTP_TIMEOUT = 30
 
-# Delay between API calls to avoid 429 rate-limit errors
-RATE_LIMIT_DELAY = 0.5
+class _RateLimitError(Exception):
+    """Raised when FRED API returns HTTP 429 — signals the caller to back off."""
+
+
+_DELAY_BASE     = 0.5   # seconds between series requests
+_DELAY_MAX      = 30.0  # cap on backed-off delay
+_BACKOFF_FACTOR = 2.0   # multiply delay on 429
+_RECOVER_FACTOR = 0.9   # multiply delay on each successful fetch
+
+CIRCUIT_BREAKER_THRESHOLD = 5
 
 FRED_SERIES = {
     # ════════════════════════════════════════════════════════════════
@@ -338,6 +346,10 @@ def extract_fred_series(
     try:
         response = requests.get(FRED_BASE_URL, params=params, timeout=HTTP_TIMEOUT)
 
+        if response.status_code == 429:
+            logger.warning("FRED rate limit (429) for %s", series_id)
+            raise _RateLimitError(series_id)
+
         if response.status_code == 400:
             logger.warning("Skipping %s — invalid series ID (400)", series_id)
             return pd.DataFrame()
@@ -363,9 +375,14 @@ def extract_fred_series(
 
         return df[["series_id", "series_name", "date", "value", "extracted_at"]]
 
+    except _RateLimitError:
+        raise  # propagate for caller's backoff loop
     except requests.Timeout:
         logger.warning("FRED request timed out for %s after %ds", series_id, HTTP_TIMEOUT)
-        return pd.DataFrame()
+        return None  # network failure — signals circuit breaker
+    except requests.ConnectionError as e:
+        logger.warning("FRED connection error for %s: %s", series_id, type(e).__name__)
+        return None  # network failure — signals circuit breaker
     except Exception as e:
         logger.warning("Could not fetch %s: %s", series_id, e)
         return pd.DataFrame()
@@ -385,17 +402,40 @@ def extract_all_fred_series(
     frames = []
     skipped = 0
     total = len(FRED_SERIES)
+    consecutive_failures = 0
+    delay = _DELAY_BASE
 
     for i, series_id in enumerate(FRED_SERIES, 1):
-        logger.info("Fetching %s (%d/%d)...", series_id, i, total)
-        df = extract_fred_series(api_key, series_id, start_date, lookback_days)
-        if not df.empty:
-            frames.append(df)
-        else:
+        logger.info("Fetching %s (%d/%d)... (delay=%.2fs)", series_id, i, total, delay)
+
+        while True:  # retry loop: only retries on 429
+            try:
+                result = extract_fred_series(api_key, series_id, start_date, lookback_days)
+                break
+            except _RateLimitError:
+                delay = min(delay * _BACKOFF_FACTOR, _DELAY_MAX)
+                logger.warning("Rate limited — sleeping %.1fs before retry", delay)
+                time.sleep(delay)
+
+        if result is None:
+            consecutive_failures += 1
             skipped += 1
+            if consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                logger.error(
+                    "Circuit breaker: %d consecutive connection failures — aborting",
+                    consecutive_failures,
+                )
+                break
+        else:
+            consecutive_failures = 0
+            if not result.empty:
+                frames.append(result)
+                delay = max(_DELAY_BASE, delay * _RECOVER_FACTOR)
+            else:
+                skipped += 1
 
         if i < total:
-            time.sleep(RATE_LIMIT_DELAY)
+            time.sleep(delay)
 
     logger.info(
         "FRED extraction complete: %d series fetched, %d skipped/empty",
