@@ -122,9 +122,10 @@ docker compose exec airflow-webserver airflow dags trigger fred_new_series_backf
 ```
 EQUITY_ANALYTICS
 ├── RAW
+│   ├── TICKER_UNIVERSE         -- canonical ticker list (1,619 tickers), FK source for all RAW tables
 │   ├── PRICES                  -- daily OHLCV, ~1,600 tickers, incremental append
 │   ├── COMPANY_INFO            -- company metadata, overwrite on each run
-│   ├── MACRO_INDICATORS        -- 197+ FRED series, incremental append
+│   ├── MACRO_INDICATORS        -- 788+ FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS    -- EAV format (income/balance/cashflow), weekly overwrite
 │   ├── VALUATION_METRICS       -- point-in-time ratios, daily append
 │   ├── DIVIDENDS_AND_SPLITS    -- full corporate action history, weekly overwrite
@@ -188,6 +189,11 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
   - Earnings history: EPS actuals vs. estimates overwrite → `RAW.EARNINGS_HISTORY`
   - Analyst recommendations: upgrade/downgrade history overwrite → `RAW.ANALYST_RECOMMENDATIONS`
   - Analyst price targets: weekly consensus snapshot append → `RAW.ANALYST_PRICE_TARGETS`
+
+**`ticker_universe_sync`** — schedule `0 8 * * 2-6` (3am ET Mon–Fri, one hour before equity_daily)
+- Scrapes S&P 500, 400, 600 components live from Wikipedia
+- MERGEs into `RAW.TICKER_UNIVERSE`: inserts new tickers, soft-deactivates removed tickers, reactivates returning tickers
+- All downstream yfinance DAGs read from this table at runtime — no Wikipedia calls in the critical path
 
 **`fred_catalog_refresh`** — schedule `0 4 2 * *` (11pm ET on the 1st of each month)
 - Crawls all ~300 FRED statistical releases
@@ -345,8 +351,8 @@ yfinance returns a fixed ~4yr/8Q window for financial statements, and values are
 **EAV -> pivot pattern for financial statements**
 yfinance returns ~276 unique line items with spaced names (e.g. "Total Revenue", "Net Income"). Storing as EAV in RAW is resilient to schema drift — new line items from yfinance don't break the load. The intermediate pivot model selects the ~35 most analytically useful fields by name and computes derived margins in a separate CTE to work around Snowflake's GROUP BY + CASE expression nesting restrictions.
 
-**Live Wikipedia scraping for index membership**
-Rather than maintaining a static ticker list, all three S&P index component lists (500, 400, 600) are fetched live from Wikipedia on each DAG run. When stocks are added or removed from an index, the next daily run picks up the change automatically. Static fallback lists cover the rare case where Wikipedia is unreachable.
+**Catalog-driven ticker universe (`RAW.TICKER_UNIVERSE`)**
+The ticker list is no longer assembled at runtime from Wikipedia scrapes. `RAW.TICKER_UNIVERSE` is the canonical table of which tickers to extract — mirroring the `RAW.FRED_SELECTION` pattern for macro series. A dedicated `ticker_universe_sync` DAG (runs at 3am ET, one hour before `equity_daily`) scrapes the current S&P 500/400/600 components from Wikipedia and MERGEs the result into `TICKER_UNIVERSE`: new index additions are inserted, deletions are soft-deactivated (`is_active=FALSE`) preserving their FK references in historical RAW data. All yfinance DAGs read from `TICKER_UNIVERSE` at runtime via `get_tickers_from_db(conn)`, falling back to the Wikipedia scrape only if the DB is unreachable. The ETF list remains hardcoded in `extract.py` and is synced into the table with `source='etf'`. `TICKER_UNIVERSE` carries FK constraints referenced by all 8 RAW ticker tables.
 
 **Catalog-driven FRED selection (`RAW.FRED_SELECTION`)**
 The `FRED_SERIES` Python dict was the original series list; it is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical table of which series to extract — separate from the catalog so it survives monthly overwrites. The `macro_daily` DAG, `macro_backfill` DAG, and `fred_new_series_backfill` DAG all read from `FRED_SELECTION` at runtime. The monthly `fred_catalog_refresh` DAG auto-deactivates any selected series that disappear from FRED, and refreshes category labels from the latest release names. To add new series: insert into `FRED_SELECTION`, then trigger `fred_new_series_backfill`. No code changes needed.

@@ -21,9 +21,12 @@
 ```
 EQUITY_ANALYTICS
 ├── RAW
+│   ├── TICKER_UNIVERSE (table) — canonical ticker list; FK referenced by all 8 RAW ticker tables
+│   │     columns: ticker (PK), source (sp500/sp400/sp600/etf/manual), is_active, is_equity,
+│   │              added_at, deactivated_at, deactivation_reason
 │   ├── PRICES (table) — ~1,600 tickers, daily OHLCV, incremental append
 │   ├── COMPANY_INFO (table) — ~1,600 tickers, metadata, overwrite on each run
-│   ├── MACRO_INDICATORS (table) — 197+ FRED series, incremental append
+│   ├── MACRO_INDICATORS (table) — 788+ FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS (table) — EAV format, income/balance/cashflow, overwrite on each run
 │   ├── VALUATION_METRICS (table) — point-in-time ratios (PE, margins, etc.), daily append
 │   ├── DIVIDENDS_AND_SPLITS (table) — full corporate action history, weekly overwrite
@@ -52,10 +55,12 @@ EQUITY_ANALYTICS
 ```
 
 ## Data coverage
-- ~1,600 tickers — full S&P Composite 1500 (S&P 500 + S&P 400 mid-cap + S&P 600 small-cap) + top ETFs
-  - All three index lists scraped live from Wikipedia on every DAG run (auto-picks up rebalances)
-  - Static fallback lists built into extract.py for all three indices
-  - Universe confirmed: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~116, total ~1,619 unique
+- ~1,619 tickers — full S&P Composite 1500 (S&P 500 + S&P 400 mid-cap + S&P 600 small-cap) + ETFs
+  - **Ticker universe architecture (May 2026):** `RAW.TICKER_UNIVERSE` is now the canonical source, mirroring `RAW.FRED_SELECTION`. All yfinance DAGs call `get_tickers_from_db(conn)` at runtime; falls back to Wikipedia scrape on DB error.
+  - `ticker_universe_sync` DAG (3am ET Mon-Fri) syncs Wikipedia → TICKER_UNIVERSE: inserts new tickers, soft-deactivates removals (FK refs preserved), reactivates returning tickers
+  - FK constraints from all 8 RAW ticker tables (PRICES, COMPANY_INFO, FINANCIAL_STATEMENTS, VALUATION_METRICS, DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) → TICKER_UNIVERSE.ticker
+  - Static fallback lists in extract.py used only when DB is unreachable
+  - Universe: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~113, total 1,619 unique
 - 788 active FRED macro series (catalog-driven, expanding via popularity-tier batches)
   - **Architecture change (May 2026):** `FRED_SERIES` Python dict is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical source of which series to extract — survives monthly catalog overwrites.
   - `get_selected_fred_series(conn)` in `extract_fred.py` reads from `FRED_SELECTION`; all three extraction DAGs use it at runtime
@@ -88,7 +93,8 @@ when the operator can monitor them locally.
 
 | DAG | Schedule | Cron | File | Description |
 |---|---|---|---|---|
-| `equity_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_equity_daily.py | Prices + company info (incremental) |
+| `ticker_universe_sync` | 3am ET Mon-Fri | `0 8 * * 2-6` | dag_ticker_universe_sync.py | Sync RAW.TICKER_UNIVERSE from Wikipedia S&P 1500 scrape; runs 1hr before equity_daily |
+| `equity_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_equity_daily.py | Prices + company info (reads TICKER_UNIVERSE, incremental) |
 | `macro_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_macro_daily.py | 788+ FRED macro series (reads FRED_SELECTION at runtime, incremental append, auto-picks up new series) |
 | `fundamentals_weekly` | 11pm ET Saturday | `0 4 * * 0` | dag_fundamentals.py | Financial statements (full overwrite) |
 | `valuation_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_fundamentals.py | Valuation snapshot (daily append) |
@@ -277,9 +283,10 @@ dbt build --profiles-dir .
 - app/components/event_study.py — Event Study tab
 - app/db/snowflake.py — Snowflake connection, execute_sql_cached, _load_private_key (supports PEM string for Community Cloud)
 - ingestion/extract.py — yfinance: prices, company info, dividends, earnings, analyst data
-  - get_sp500_tickers() / get_sp400_tickers() / get_sp600_tickers() — live Wikipedia scrapers
-  - get_all_tickers() — full universe (S&P 1500 + ETFs, ~1,619)
-  - get_equity_tickers() — S&P 1500 equities only, no ETFs (~1,500)
+  - get_tickers_from_db(conn) — PRIMARY source; reads active tickers from RAW.TICKER_UNIVERSE; returns (all_tickers, equity_tickers); falls back to Wikipedia scrape on DB error
+  - get_sp500_tickers() / get_sp400_tickers() / get_sp600_tickers() — live Wikipedia scrapers (fallback + used by ticker_universe_sync)
+  - get_all_tickers() — fallback: Wikipedia scrape + ETF list (~1,619); called by get_tickers_from_db on DB error
+  - get_equity_tickers() — fallback: S&P 1500 equities only, no ETFs (~1,506)
 - ingestion/extract_fred.py — FRED API: `FRED_SERIES` dict is fallback-only; `get_selected_fred_series(conn)` reads from RAW.FRED_SELECTION; `extract_all_fred_series` accepts optional `series_dict` param; `extract_fred_series` accepts optional `series_name` param
 - ingestion/extract_fred_catalog.py — FRED releases + series catalog crawler
   - get_all_releases() uses order_by="release_id" (not "popularity" — invalid for /releases)
@@ -295,6 +302,8 @@ dbt build --profiles-dir .
 - airflow/dags/dag_backfill_new_tickers.py — backfill new-only tickers (diffs against RAW.PRICES)
 - airflow/dags/dag_macro_backfill.py — macro_backfill DAG (manual, full FRED history — paused by default)
 - airflow/dags/dag_fred_new_series_backfill.py — fred_new_series_backfill DAG (manual, new series only, append-safe)
+- airflow/dags/dag_ticker_universe_sync.py — ticker_universe_sync DAG (3am ET Mon-Fri; Wikipedia → RAW.TICKER_UNIVERSE MERGE)
+- ingestion/seed_ticker_universe.py — one-shot seeder for TICKER_UNIVERSE (MERGE-safe, re-runnable)
 - scripts/db_health_check.py — reusable DB health check (run anytime, exits 0=pass/1=fail)
 - scripts/create_fred_hygiene_view.py — one-shot DDL runner for VW_FRED_HYGIENE in RAW schema
   - Thresholds: EXPECTED_TICKERS=1500, MIN_TICKERS_PER_DAY=1400, MIN_FUNDAMENTAL_TICKERS=1200
