@@ -134,12 +134,15 @@ FRED_SERIES = {
 }
 
 
+CIRCUIT_BREAKER_THRESHOLD = 5
+
+
 def extract_fred_series(
     api_key: str,
     series_id: str,
     start_date: str | None = None,
     lookback_days: int = 365
-) -> pd.DataFrame:
+) -> pd.DataFrame | None:
     """
     Extract a single FRED series.
     Returns empty DataFrame if series not found or request fails.
@@ -184,7 +187,10 @@ def extract_fred_series(
 
     except requests.Timeout:
         logger.warning("FRED request timed out for %s after %ds", series_id, HTTP_TIMEOUT)
-        return pd.DataFrame()
+        return None  # Network failure — signals circuit breaker
+    except requests.ConnectionError as e:
+        logger.warning("FRED connection error for %s: %s", series_id, type(e).__name__)
+        return None  # Network failure — signals circuit breaker
     except Exception as e:
         logger.warning("Could not fetch %s: %s", series_id, e)
         return pd.DataFrame()
@@ -198,14 +204,27 @@ def extract_all_fred_series(
     """Extract all configured FRED series and combine into one DataFrame."""
     frames = []
     skipped = 0
+    consecutive_failures = 0
 
     for series_id in FRED_SERIES:
         logger.info("Fetching %s...", series_id)
-        df = extract_fred_series(api_key, series_id, start_date, lookback_days)
-        if not df.empty:
-            frames.append(df)
-        else:
+        result = extract_fred_series(api_key, series_id, start_date, lookback_days)
+
+        if result is None:
+            consecutive_failures += 1
             skipped += 1
+            if consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD:
+                logger.error(
+                    "Circuit breaker: %d consecutive connection failures — aborting FRED extraction",
+                    consecutive_failures,
+                )
+                break
+        else:
+            consecutive_failures = 0
+            if not result.empty:
+                frames.append(result)
+            else:
+                skipped += 1
 
     logger.info(
         "FRED extraction complete: %d series fetched, %d skipped/empty",

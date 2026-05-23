@@ -121,6 +121,13 @@ python -c "from dotenv import load_dotenv; load_dotenv(); from ingestion.pipelin
 - Merge to main → dbt build runs with target: prod writing to MARTS directly
 - PRs blocked from merging if any dbt model or test fails
 
+## Security fixes applied (branch: fix/critical-issues)
+- `ingestion/load.py` — added `_validate_table_name()` whitelist (frozenset) to prevent SQL injection in `get_max_date` / `get_min_date`
+- `dbt_project/models/staging/stg_valuation_metrics.sql` — replaced all `CAST` with `TRY_CAST` for numeric columns to handle yfinance string sentinels ('N/A', 'Infinity')
+- `ingestion/extract_fundamentals.py` — lowered sentinel value cap from `1e18` to `1e15` (no financial metric exceeds $1 quadrillion)
+- `ingestion/extract_fred.py` — added circuit breaker: `extract_fred_series` returns `None` for network failures; `extract_all_fred_series` aborts after 5 consecutive `None` returns
+- `app/components/event_study.py` — changed `re.match` to `re.fullmatch` for ticker validation (ticker is interpolated directly into SQL)
+
 ## Known issues / decisions made
 - Snowflake free trial: $20/month after 30 days — set calendar reminder before expiry
 - Prefect free tier: no custom work pools — use flow.serve() locally

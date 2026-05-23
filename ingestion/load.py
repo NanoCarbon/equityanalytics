@@ -7,6 +7,18 @@ from datetime import datetime, date
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_TABLES = frozenset({
+    "PRICES", "COMPANY_INFO", "MACRO_INDICATORS",
+    "FINANCIAL_STATEMENTS", "VALUATION_METRICS",
+})
+
+
+def _validate_table_name(table_name: str) -> str:
+    upper = table_name.upper()
+    if upper not in _ALLOWED_TABLES:
+        raise ValueError(f"Table '{table_name}' is not in the allowed list.")
+    return upper
+
 
 def get_connection():
     return snowflake.connector.connect(
@@ -33,7 +45,7 @@ def get_max_date(table_name: str) -> date | None:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT MAX(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
-            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+            FROM EQUITY_ANALYTICS.RAW.{_validate_table_name(table_name)}
         """)
         result = cursor.fetchone()[0]
         logger.info("get_max_date(%s) = %s", table_name, result)
@@ -59,7 +71,7 @@ def get_min_date(table_name: str) -> date | None:
         cursor = conn.cursor()
         cursor.execute(f"""
             SELECT MIN(TO_DATE(DATEADD(second, DATE / 1000000000, '1970-01-01')))
-            FROM EQUITY_ANALYTICS.RAW.{table_name.upper()}
+            FROM EQUITY_ANALYTICS.RAW.{_validate_table_name(table_name)}
         """)
         result = cursor.fetchone()[0]
         logger.info("get_min_date(%s) = %s", table_name, result)

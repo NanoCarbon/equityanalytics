@@ -217,7 +217,7 @@ def extract_valuation_metrics(
                 value = info.get(field)
                 # yfinance sometimes returns 'Infinity' or very large sentinel values
                 if value is not None and isinstance(value, (int, float)):
-                    if abs(value) > 1e18:
+                    if abs(value) > 1e15:
                         value = None
                 row[field] = value
 
