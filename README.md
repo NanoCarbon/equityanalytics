@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 203 Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 197+ Federal Reserve macro indicators (catalog-driven, expanding), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -36,7 +36,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 | Layer | Tool | Purpose |
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
-| Ingestion | Python + FRED API | 203 FRED macro series (waves 1–6 complete) + full FRED series catalog |
+| Ingestion | Python + FRED API | 197+ FRED macro series (catalog-driven selection) + full FRED series catalog |
 | Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
@@ -68,9 +68,13 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 - **Analyst price targets** — mean/high/low/count consensus snapshot appended weekly to build a time series
 
 ### Macro Indicators (FRED)
-203 series across 15 categories. Premium index series (SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225) excluded — require a paid FRED subscription:
+
+Series selection is **catalog-driven**: `RAW.FRED_SELECTION` is the canonical source of truth for which series to extract. The `FRED_SERIES` dict in `extract_fred.py` is a local fallback name map only. To add or remove series, update `FRED_SELECTION` directly and trigger `fred_new_series_backfill`. Premium index series (SP500, NASDAQCOM, DJIA) require a paid FRED subscription and are auto-deactivated on first backfill.
+
+**197 curated series** across 15 categories (confirmed valid against FRED catalog). Expanding to high-popularity catalog series in 4 batches:
+
 - **Interest rates** (14) — DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, full Treasury curve DGS1MO → DGS30
-- **Yield curve & spreads** (18) — T10Y2Y, T10Y3M, DFII2–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
+- **Yield curve & spreads** (17) — T10Y2Y, T10Y3M, DFII5–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
 - **Inflation** (20) — CPI headline/core, PCE headline/core, PPI, UMich inflation expectations, CPI sub-components (housing, energy, medical, transport, recreation, durables), Atlanta Fed sticky/flexible CPI, GDP deflator
 - **Labor market** (26) — UNRATE, U6RATE, PAYEMS, CIVPART, EMRATIO, CNP16OV, JOLTS (openings, hires, quits, layoffs), jobless claims, manufacturing/services/construction/financial/mining/trade payrolls, average hours, average earnings, ECI wages, productivity (OPHNFB), unit labor costs
 - **GDP & growth** (15) — GDP, real GDP, potential GDP, GDP deflator, industrial production (total + manufacturing + capacity utilization), durable/capital goods orders, inventory-to-sales ratio, CFNAI and 3-month MA
@@ -78,17 +82,38 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 - **Credit & financial conditions** (18) — HY/IG/commercial paper spreads, corporate bond yields (Aaa/Baa), mortgage/residential/business loan delinquency rates, bank loans outstanding, deposits, commercial paper outstanding, SLOOS lending standards and demand (C&I + consumer), NFCI and adjusted NFCI
 - **Housing** (13) — mortgage rates (30yr/15yr), housing starts (total + single-family), building permits, new/existing home sales, median sale price, Case-Shiller, homeowner/rental vacancy rates, total construction spending
 - **Money supply** (11) — M1, M2, M2 velocity, monetary base, retail/institutional money funds, Fed balance sheet (WALCL), reserve balances, RRPONTSYD
-- **Trade & FX** (15) — exports, imports, export prices, broad USD index, 8 major currency pairs (EUR, JPY, GBP, CNY, CAD, BRL, KRW, INR, MXN), wholesale inventories and sales
-- **Energy & commodities** (12) — WTI, Brent, gasoline, natural gas, retail electricity, gold, copper, nickel, iron ore, wheat, corn, cotton
+- **Trade & FX** (13) — exports, imports, export prices, broad USD index, 8 major currency pairs (EUR, JPY, GBP, CNY, CAD, BRL, KRW, INR, MXN), wholesale inventories and sales
+- **Energy & commodities** (11) — WTI, Brent, gasoline, natural gas, retail electricity, copper, nickel, iron ore, wheat, corn, cotton
 - **Market indicators** (4) — VIX, NBER recession indicators (two variants), Empire State manufacturing survey
-- **Regional Fed manufacturing** (12) — Philly Fed (general activity, new orders, prices paid, employment, shipments), Richmond Fed (business conditions, employment), Dallas Fed (activity, production, employment), Kansas City Fed (activity, production)
+- **Regional Fed manufacturing** (8) — Philly Fed survey: GACDFSA, NOCDFSA, PPCDFSA, NECDFSA, SHCDFSA; Dallas Fed survey: BACTSAMFRBDAL, PRODSAMFRBDAL, NEMPSAMFRBDAL
 - **Government finance & fiscal** (8) — gross federal debt, debt/GDP, monthly Treasury surplus/deficit, federal receipts, expenditures, government net saving, outlays/GDP, revenue/GDP
-- **Banking profitability & deposits** (8) — net interest margin, ROE, ROA, consumer loan delinquency, total deposits, prime rate, large time deposits, bank equity/assets ratio
+- **Banking profitability & deposits** (8) — net interest margin (USNIM), ROE, ROA, consumer loan delinquency, total deposits, prime rate, large time deposits (LTDACBM027NBOG), bank equity/assets (EQTA)
 
-### FRED Series Catalog
-- **RAW.FRED_RELEASES** — one row per FRED statistical release (~300 rows), rebuilt monthly
-- **RAW.FRED_SERIES_CATALOG** — one row per unique FRED series (~50–150K rows), rebuilt monthly
-- Use as an information schema to discover new series, check coverage gaps, and prioritize what to ingest next
+### FRED Series Catalog & Selection
+
+| Table | Purpose |
+|---|---|
+| `RAW.FRED_RELEASES` | One row per FRED statistical release (~300 rows), rebuilt monthly |
+| `RAW.FRED_SERIES_CATALOG` | One row per unique FRED series (~800K rows), rebuilt monthly — the universe |
+| `RAW.FRED_SELECTION` | **Canonical selection table** — which series we actively extract (`is_active`, `category`, `local_name`). Persists across catalog refreshes. Monthly refresh auto-deactivates entries whose series no longer exist in FRED. |
+
+**Adding a new series:**
+```sql
+-- 1. Find it in the catalog
+SELECT series_id, title, popularity, frequency_short, observation_end
+FROM RAW.FRED_SERIES_CATALOG
+WHERE title ILIKE '%your search term%'
+  AND UPPER(title) NOT LIKE '%DISCONTINUED%'
+ORDER BY popularity DESC;
+
+-- 2. Add to selection
+INSERT INTO RAW.FRED_SELECTION (series_id, local_name, category, is_active)
+VALUES ('SERIES_ID', 'Your descriptive name', 'Category', TRUE);
+```
+```bash
+# 3. Backfill its full history
+docker compose exec airflow-webserver airflow dags trigger fred_new_series_backfill
+```
 
 ---
 
@@ -99,7 +124,7 @@ EQUITY_ANALYTICS
 ├── RAW
 │   ├── PRICES                  -- daily OHLCV, ~1,600 tickers, incremental append
 │   ├── COMPANY_INFO            -- company metadata, overwrite on each run
-│   ├── MACRO_INDICATORS        -- 175 FRED series, incremental append
+│   ├── MACRO_INDICATORS        -- 197+ FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS    -- EAV format (income/balance/cashflow), weekly overwrite
 │   ├── VALUATION_METRICS       -- point-in-time ratios, daily append
 │   ├── DIVIDENDS_AND_SPLITS    -- full corporate action history, weekly overwrite
@@ -107,7 +132,8 @@ EQUITY_ANALYTICS
 │   ├── ANALYST_RECOMMENDATIONS -- upgrade/downgrade history, weekly overwrite
 │   ├── ANALYST_PRICE_TARGETS   -- consensus price target snapshot, weekly append
 │   ├── FRED_RELEASES           -- FRED publication metadata, monthly overwrite
-│   ├── FRED_SERIES_CATALOG     -- all FRED series metadata, monthly overwrite
+│   ├── FRED_SERIES_CATALOG     -- all FRED series metadata (~800K rows), monthly overwrite
+│   ├── FRED_SELECTION          -- canonical selection: which series to extract (persists across refreshes)
 │   └── VW_FRED_HYGIENE         -- view: latest/prev obs date + row-count per series (duplicate detector)
 ├── STAGING (views)
 │   ├── STG_PRICES
@@ -145,7 +171,7 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 - Appends to `RAW.PRICES`, overwrites `RAW.COMPANY_INFO`
 
 **`macro_daily`** — schedule `0 4 * * 2-6` (11pm ET Mon–Fri)
-- All 203 FRED series fetched automatically — adding series to `FRED_SERIES` in `extract_fred.py` is sufficient, no DAG changes needed
+- Reads active series at runtime from `RAW.FRED_SELECTION` (joined to catalog) — no code changes needed to add or remove series
 - Incremental append: queries `MAX(date)` already loaded and fetches only newer observations (with a 7-day overlap to catch FRED revisions)
 - Falls back to 30-day lookback if the table is empty
 
@@ -177,9 +203,10 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 - Use only when intentionally refreshing all series (e.g. after GDP restatements). Dangerous: overwrites history.
 
 **`fred_new_series_backfill`** — `schedule=None` (manual trigger only)
-- Safe alternative: computes the set difference between `FRED_SERIES` and series already in `RAW.MACRO_INDICATORS`
+- Reads from `RAW.FRED_SELECTION` to identify active series not yet in `RAW.MACRO_INDICATORS`
 - Fetches full history only for series not yet loaded — appends with `overwrite=False`, never touches existing data
-- Idempotent: safe to re-run. Use this after adding new series to `FRED_SERIES`.
+- Auto-deactivates series that return no data (invalid ID or premium) — keeps `FRED_SELECTION` clean
+- Idempotent: safe to re-run. Use this after inserting new rows into `RAW.FRED_SELECTION`.
 
 ### Transformation Layer
 
@@ -321,8 +348,11 @@ yfinance returns ~276 unique line items with spaced names (e.g. "Total Revenue",
 **Live Wikipedia scraping for index membership**
 Rather than maintaining a static ticker list, all three S&P index component lists (500, 400, 600) are fetched live from Wikipedia on each DAG run. When stocks are added or removed from an index, the next daily run picks up the change automatically. Static fallback lists cover the rare case where Wikipedia is unreachable.
 
+**Catalog-driven FRED selection (`RAW.FRED_SELECTION`)**
+The `FRED_SERIES` Python dict was the original series list; it is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical table of which series to extract — separate from the catalog so it survives monthly overwrites. The `macro_daily` DAG, `macro_backfill` DAG, and `fred_new_series_backfill` DAG all read from `FRED_SELECTION` at runtime. The monthly `fred_catalog_refresh` DAG auto-deactivates any selected series that disappear from FRED, and refreshes category labels from the latest release names. To add new series: insert into `FRED_SELECTION`, then trigger `fred_new_series_backfill`. No code changes needed.
+
 **FRED catalog as an information schema**
-Rather than manually tracking which FRED series exist, a monthly DAG crawls all ~300 FRED statistical releases and catalogs every series with its popularity score (0-100). This makes it easy to find high-value series not yet being ingested by querying `RAW.FRED_SERIES_CATALOG` against `RAW.MACRO_INDICATORS`.
+A monthly DAG crawls all ~300 FRED statistical releases and catalogs every series (~800K rows) with popularity scores, frequency, units, and history bounds. Query `RAW.FRED_SERIES_CATALOG` to discover new series. The catalog is a reference; `RAW.FRED_SELECTION` is what actually drives extraction.
 
 **Rate limiting for all per-ticker and per-series calls**
 Price data uses yfinance bulk download. Everything else (metadata, fundamentals, FRED series) uses per-item calls with explicit `time.sleep()` delays — 0.5s for most calls, 2s for valuation metrics. FRED gets a 15s backoff on 429 with one retry before skipping.
@@ -541,17 +571,30 @@ dbt build --profiles-dir . --select fact_daily_prices --full-refresh
 
 ### Adding New FRED Series (targeted backfill)
 
-After adding series to `FRED_SERIES` in `ingestion/extract_fred.py`:
+No code changes needed. Find the series in the catalog, insert into `FRED_SELECTION`, trigger the backfill:
+
+```sql
+-- 1. Find the series in the catalog
+SELECT series_id, title, popularity, frequency_short, observation_end
+FROM EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG
+WHERE title ILIKE '%breakeven inflation%'
+  AND UPPER(title) NOT LIKE '%DISCONTINUED%'
+ORDER BY popularity DESC LIMIT 5;
+
+-- 2. Add to selection
+INSERT INTO EQUITY_ANALYTICS.RAW.FRED_SELECTION (series_id, local_name, category, is_active)
+VALUES ('T10YIE', '10-Year Breakeven Inflation Rate', 'FRB H.15 Selected Interest Rates', TRUE);
+```
 
 ```bash
-# 1. Trigger the targeted backfill — appends full history for NEW series only, never touches existing data
+# 3. Backfill full history for new series only
 docker compose exec airflow-webserver airflow dags trigger fred_new_series_backfill
 
-# 2. Full-refresh the mart to incorporate new series history
+# 4. Full-refresh the mart to incorporate new series
 dbt build --profiles-dir . --select fact_macro_readings --full-refresh
 ```
 
-The DAG computes `FRED_SERIES.keys() - series already in RAW.MACRO_INDICATORS` at runtime — idempotent and safe to re-run.
+The DAG computes `FRED_SELECTION(is_active) - series already in RAW.MACRO_INDICATORS` at runtime — idempotent and safe to re-run. Series returning no data (invalid ID or premium) are auto-deactivated in `FRED_SELECTION`.
 
 ### Macro Backfill (full FRED history — use sparingly)
 
@@ -638,7 +681,7 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 | Market indicators | 4 | VIXCLS, USREC, USRECM, Empire State manufacturing (GACDISA) |
 | Regional Fed manufacturing *(Wave 4)* | 12 | Philly (PHFRBIND/NDI/P/E/SIP), Richmond (RMBSIICS/E), Dallas (DALLASMI/PE/EO), KC (KANSASMI/PE) |
 | Government finance & fiscal *(Wave 5)* | 8 | GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, HBFRGDP |
-| Banking profitability & deposits *(Wave 6)* | 8 | USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, DTCTMFNM, EQTATOA |
+| Banking profitability & deposits *(Wave 6)* | 8 | USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, LTDACBM027NBOG, EQTA |
 | **Total** | **203** | |
 
 ---
@@ -650,28 +693,39 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 - **dbt models for supplemental tables** — staging and mart models for `DIVIDENDS_AND_SPLITS`, `EARNINGS_HISTORY`, `ANALYST_RECOMMENDATIONS`, and `ANALYST_PRICE_TARGETS`.
 - **NASDAQ Trader file integration** — replace Wikipedia scraping with the official NASDAQ trader file to cover all ~8,000–9,000 US-listed securities including OTC, micro-cap, and newly-listed stocks.
 
-### FRED Series Expansion Roadmap
+### FRED Series Expansion
 
-The goal is exhaustive coverage of the FRED catalog — systematic breadth over selective curation. Use `RAW.FRED_SERIES_CATALOG` to verify series IDs before adding each wave. Query against `RAW.MACRO_INDICATORS` to confirm gaps.
+Series selection is now catalog-driven via `RAW.FRED_SELECTION`. The wave model below is replaced by **popularity-tier batches** — new series are added in bulk from `FRED_SERIES_CATALOG` by popularity score, confirmed valid, inserted into `FRED_SELECTION`, and backfilled.
 
-**Wave 4 — Regional Federal Reserve Economic Surveys** ✅ COMPLETE (12 series)
+| Batch | Popularity | Catalog count | Status |
+|---|---|---|---|
+| Batch 1 | ≥ 70 | ~93 | Running |
+| Batch 2 | 50–69 | ~498 | Queued |
+| Batch 3 | 30–49 | ~1,546 | Queued |
+| Batch 4 | 15–29 | ~3,757 | Queued |
+
+Series marked DISCONTINUED in FRED are auto-deactivated after each monthly catalog refresh. Premium series (403) are auto-deactivated after the first backfill attempt.
+
+---
+
+**Historical waves (pre-catalog-driven architecture):**
+
+**Wave 4 — Regional Federal Reserve Economic Surveys** ✅ COMPLETE (8 valid series)
 
 Five regional Fed banks publish monthly manufacturing and services surveys. We have Chicago (CFNAI, NFCI) and New York (Empire State). Missing:
 
 | Series | Description | Bank |
 |---|---|---|
-| PHFRBIND | General Activity Index | Philadelphia Fed |
-| PHFRBNDI | New Orders Index | Philadelphia Fed |
-| PHFRBP | Prices Paid Index | Philadelphia Fed |
-| PHFRBE | Employment Index | Philadelphia Fed |
-| PHFRBSIP | Shipments Index | Philadelphia Fed |
-| RMBSIICS | Business Conditions Index | Richmond Fed |
-| RMBSIE | Employment Index | Richmond Fed |
-| DALLASMI | General Business Activity | Dallas Fed |
-| DALLASPE | Production Volume | Dallas Fed |
-| DALLASEO | Employment | Dallas Fed |
-| KANSASMI | Manufacturing Activity | Kansas City Fed |
-| KANSASPE | Production | Kansas City Fed |
+| GACDFSA066MSFRBPHI | Current General Activity (Diffusion Index) | Philadelphia Fed |
+| NOCDFSA066MSFRBPHI | Current New Orders (Diffusion Index) | Philadelphia Fed |
+| PPCDFSA066MSFRBPHI | Current Prices Paid (Diffusion Index) | Philadelphia Fed |
+| NECDFSA066MSFRBPHI | Current Employment (Diffusion Index) | Philadelphia Fed |
+| SHCDFSA066MSFRBPHI | Current Shipments (Diffusion Index) | Philadelphia Fed |
+| BACTSAMFRBDAL | Current General Business Activity | Dallas Fed |
+| PRODSAMFRBDAL | Current Production | Dallas Fed |
+| NEMPSAMFRBDAL | Current Employment | Dallas Fed |
+
+Note: Richmond Fed and Kansas City Fed manufacturing surveys are not available in the FRED catalog. Original IDs (PHFRBIND, RMBSIICS, DALLASMI, KANSASMI etc.) were invalid — corrected to catalog-confirmed IDs above.
 
 Rationale: Regional surveys provide leading signals on manufacturing activity and inflation pressure at a sub-national level — correlated with but leading national ISM data.
 
@@ -690,7 +744,7 @@ Currently zero federal fiscal coverage despite fiscal policy being a primary mac
 | FGEXPND | Federal Government Current Expenditures | Quarterly |
 | GGSAVE | Government Net Saving (national accounts) | Quarterly |
 | FYONGDA188S | Federal Net Outlays as % of Nominal GDP | Annual |
-| HBFRGDP | Federal Revenue as % of GDP | Annual |
+| FYFRGDA188S | Federal Receipts as % of GDP | Annual |
 
 Rationale: Debt sustainability and fiscal impulse affect real rates, inflation, and growth. Completely absent from current coverage.
 

@@ -103,9 +103,64 @@ def fred_catalog_refresh():
         else:
             logger.warning("No catalog data to load")
 
+        # Post-refresh: sync FRED_SELECTION against the refreshed catalog.
+        # 1. Deactivate selections whose series_id no longer exists in FRED.
+        # 2. Refresh category from updated release_name.
+        from ingestion.load import get_connection
+
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+
+            # Deactivate selections removed from FRED entirely
+            cur.execute("""
+                UPDATE EQUITY_ANALYTICS.RAW.FRED_SELECTION s
+                SET    is_active           = FALSE,
+                       deactivated_at      = CURRENT_TIMESTAMP,
+                       deactivation_reason = 'Series no longer present in FRED catalog after monthly refresh'
+                WHERE  s.is_active = TRUE
+                  AND  NOT EXISTS (
+                           SELECT 1 FROM EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG c
+                           WHERE  c.series_id = s.series_id
+                       )
+            """)
+            removed = cur.rowcount
+            if removed:
+                logger.warning(
+                    "Deactivated %d FRED_SELECTION entries removed from FRED: check logs for series IDs",
+                    removed,
+                )
+                # Log which ones
+                cur.execute("""
+                    SELECT series_id, local_name FROM EQUITY_ANALYTICS.RAW.FRED_SELECTION
+                    WHERE is_active = FALSE
+                      AND deactivation_reason LIKE '%monthly refresh%'
+                    ORDER BY deactivated_at DESC
+                    LIMIT 50
+                """)
+                for row in cur.fetchall():
+                    logger.warning("  Removed from FRED: %s (%s)", row[0], row[1])
+
+            # Refresh category from latest release_name
+            cur.execute("""
+                UPDATE EQUITY_ANALYTICS.RAW.FRED_SELECTION s
+                SET    category = c.release_name
+                FROM   EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG c
+                WHERE  c.series_id = s.series_id
+                  AND  (s.category IS NULL OR s.category != c.release_name)
+            """)
+            refreshed_cats = cur.rowcount
+            logger.info("Refreshed %d category labels in FRED_SELECTION", refreshed_cats)
+
+            cur.close()
+            results["selections_deactivated"] = removed
+        finally:
+            conn.close()
+
         logger.info(
-            "Catalog refresh complete — %d releases, %d series",
+            "Catalog refresh complete — %d releases, %d series, %d selections deactivated",
             results["releases_loaded"], results["series_loaded"],
+            results.get("selections_deactivated", 0),
         )
         return results
 

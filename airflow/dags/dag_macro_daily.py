@@ -55,10 +55,17 @@ def macro_daily():
         """
         import os
         from datetime import date, timedelta
-        from ingestion.extract_fred import extract_all_fred_series
-        from ingestion.load import load_dataframe, get_max_date
+        from ingestion.extract_fred import extract_all_fred_series, get_selected_fred_series
+        from ingestion.load import load_dataframe, get_max_date, get_connection
 
         api_key = os.environ["FRED_API_KEY"]
+
+        # Load series selection from catalog (falls back to FRED_SERIES dict on error)
+        conn = get_connection()
+        try:
+            series_dict = get_selected_fred_series(conn)
+        finally:
+            conn.close()
 
         max_date = get_max_date("MACRO_INDICATORS")
         if max_date:
@@ -71,7 +78,9 @@ def macro_daily():
             lookback_days = 30
             logger.info("Table empty — falling back to 30-day lookback")
 
-        df = extract_all_fred_series(api_key, lookback_days=lookback_days, start_date=start_date)
+        df = extract_all_fred_series(
+            api_key, lookback_days=lookback_days, start_date=start_date, series_dict=series_dict
+        )
 
         if df is None or df.empty:
             logger.info("No new macro data returned")

@@ -23,7 +23,7 @@ EQUITY_ANALYTICS
 ├── RAW
 │   ├── PRICES (table) — ~1,600 tickers, daily OHLCV, incremental append
 │   ├── COMPANY_INFO (table) — ~1,600 tickers, metadata, overwrite on each run
-│   ├── MACRO_INDICATORS (table) — 175 FRED series, incremental append
+│   ├── MACRO_INDICATORS (table) — 197+ FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS (table) — EAV format, income/balance/cashflow, overwrite on each run
 │   ├── VALUATION_METRICS (table) — point-in-time ratios (PE, margins, etc.), daily append
 │   ├── DIVIDENDS_AND_SPLITS (table) — full corporate action history, weekly overwrite
@@ -31,7 +31,8 @@ EQUITY_ANALYTICS
 │   ├── ANALYST_RECOMMENDATIONS (table) — upgrade/downgrade history, weekly overwrite
 │   ├── ANALYST_PRICE_TARGETS (table) — consensus price target snapshot, weekly append
 │   ├── FRED_RELEASES (table) — FRED publication metadata, monthly overwrite
-│   └── FRED_SERIES_CATALOG (table) — all FRED series metadata, monthly overwrite
+│   ├── FRED_SERIES_CATALOG (table) — all FRED series metadata (~800K rows), monthly overwrite
+│   └── FRED_SELECTION (table) — canonical selection: series_id + local_name + category + is_active; persists across catalog refreshes
 ├── STAGING (views)
 │   ├── STG_PRICES
 │   ├── STG_COMPANIES
@@ -55,8 +56,15 @@ EQUITY_ANALYTICS
   - All three index lists scraped live from Wikipedia on every DAG run (auto-picks up rebalances)
   - Static fallback lists built into extract.py for all three indices
   - Universe confirmed: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~116, total ~1,619 unique
-- ~175 FRED macro series across 12 categories (5 premium series removed — require paid FRED subscription)
-  - Expanded in May 2026: added 80 new series across Tiers 1–3 (regional Fed indices, CPI sub-components, sector payrolls, commodity prices, SLOOS, NFCI, etc.)
+- 197 FRED macro series (catalog-driven, expanding via popularity-tier batches)
+  - **Architecture change (May 2026):** `FRED_SERIES` Python dict is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical source of which series to extract — survives monthly catalog overwrites.
+  - `get_selected_fred_series(conn)` in `extract_fred.py` reads from `FRED_SELECTION`; all three extraction DAGs use it at runtime
+  - Monthly `fred_catalog_refresh` auto-deactivates selections whose series_id disappears from FRED; refreshes category from latest release_name
+  - `fred_new_series_backfill` DAG sources from `FRED_SELECTION - MACRO_INDICATORS`; auto-deactivates series returning no data (invalid ID or premium)
+  - 15 invalid wave 4–6 series IDs corrected or removed: PHFRBIND→GACDFSA066MSFRBPHI, DALLASMI→BACTSAMFRBDAL, HBFRGDP→FYFRGDA188S, DTCTMFNM→LTDACBM027NBOG, EQTATOA→EQTA; Richmond/KC Fed not available in catalog (removed)
+  - 3 additional invalid IDs removed: BAMLH0A3HYM2→BAMLH0A3HYC, DFII2 (no 2Y TIPS in FRED), GOLDAMGBD228NLBM (not in catalog)
+  - Net selection: 197 active series, all confirmed in FRED catalog
+  - Expanding to catalog-wide high-value series in 4 batches (pop≥70, 50-69, 30-49, 15-29 → ~5,900 additional series)
   - VW_FRED_HYGIENE view in RAW schema: per-series latest/prev observation date + row count for duplicate detection
 - Financial statements: income statement, balance sheet, cash flow (annual + quarterly)
   - EAV format in RAW/staging, pivoted to ~35 named columns in marts
@@ -88,7 +96,7 @@ when the operator can monitor them locally.
 | `backfill_prices` | None (manual) | — | dag_backfill.py | Historical OHLCV prices back to 2010 |
 | `backfill_new_tickers` | None (manual) | — | dag_backfill_new_tickers.py | Backfill ONLY tickers not yet in RAW.PRICES |
 | `macro_backfill` | None (manual, **paused**) | — | dag_macro_backfill.py | Full FRED history, all series — full overwrite (dangerous; paused by default) |
-| `fred_new_series_backfill` | None (manual) | — | dag_fred_new_series_backfill.py | Full history for NEW series only — append-safe, idempotent |
+| `fred_new_series_backfill` | None (manual) | — | dag_fred_new_series_backfill.py | Full history for NEW selected series only — sources from FRED_SELECTION, append-safe, idempotent, auto-deactivates invalid/premium series |
 
 Trigger a DAG manually (run from the repo root on Windows):
 ```powershell
@@ -164,11 +172,11 @@ docker compose exec airflow-webserver airflow tasks states-for-dag-run <dag_id> 
 ## Key ingestion behaviors
 
 **macro_daily** — incremental append, NOT overwrite:
-- Queries `MAX(date)` already in `RAW.MACRO_INDICATORS`
-- Fetches FRED data from `(max_date - 7 days)` forward to catch recent FRED revisions
+- Reads active series from `RAW.FRED_SELECTION` via `get_selected_fred_series(conn)` at task start
+- Falls back to `FRED_SERIES` dict if Snowflake is unreachable (safeguard, never fails the DAG)
+- Queries `MAX(date)` already in `RAW.MACRO_INDICATORS`; fetches from `(max_date - 7 days)` to catch FRED revisions
 - Falls back to 30-day lookback if table is empty
-- Automatically picks up new series added to `FRED_SERIES` — no DAG changes needed
-- Use `fred_new_series_backfill` (manual) after adding new series to load their full history
+- To add new series: insert into `FRED_SELECTION`, then trigger `fred_new_series_backfill` for full history
 - Use `macro_backfill` (manual, paused) only to refresh ALL series history — full overwrite
 
 **equity_daily** — incremental prices, overwrite metadata:
@@ -271,7 +279,7 @@ dbt build --profiles-dir .
   - get_sp500_tickers() / get_sp400_tickers() / get_sp600_tickers() — live Wikipedia scrapers
   - get_all_tickers() — full universe (S&P 1500 + ETFs, ~1,619)
   - get_equity_tickers() — S&P 1500 equities only, no ETFs (~1,500)
-- ingestion/extract_fred.py — FRED API: 175 series dict (FRED_SERIES), rate-limited extraction
+- ingestion/extract_fred.py — FRED API: `FRED_SERIES` dict is fallback-only; `get_selected_fred_series(conn)` reads from RAW.FRED_SELECTION; `extract_all_fred_series` accepts optional `series_dict` param; `extract_fred_series` accepts optional `series_name` param
 - ingestion/extract_fred_catalog.py — FRED releases + series catalog crawler
   - get_all_releases() uses order_by="release_id" (not "popularity" — invalid for /releases)
 - ingestion/extract_fundamentals.py — financial statements (EAV) + valuation metrics extraction
@@ -326,13 +334,32 @@ dbt build --profiles-dir .
   - `extract_dividends_and_splits`, `extract_earnings_history`, `extract_analyst_recommendations`, `extract_analyst_price_targets`: pause 15s every 150 tickers
   - `extract_financial_statements`: already had batch pauses
 
-## FRED expansion — waves 4–6 (branch: fred-waves-4-6)
-- Added 28 new series to `ingestion/extract_fred.py`: 175 → 203 total
-- Wave 4 (12): Philly Fed (PHFRBIND/NDI/P/E/SIP), Richmond (RMBSIICS/E), Dallas (DALLASMI/PE/EO), KC (KANSASMI/PE)
-- Wave 5 (8): Federal fiscal — GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, HBFRGDP
-- Wave 6 (8): Banking profitability — USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, DTCTMFNM, EQTATOA
-- `fred_new_series_backfill` DAG triggered — appends full history for new series only, never touches existing data
-- After backfill completes: `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
+## FRED architecture overhaul (May 2026, branch: fred-waves-4-6)
+
+### Catalog-driven selection
+- `RAW.FRED_SELECTION` table created — canonical source of which series to extract
+- All extraction DAGs (`macro_daily`, `macro_backfill`, `fred_new_series_backfill`) now query `FRED_SELECTION` at runtime via `get_selected_fred_series(conn)`
+- `FRED_SERIES` dict in `extract_fred.py` retained as local fallback only
+- `fred_catalog_refresh` DAG updated: post-refresh step auto-deactivates selections removed from FRED and refreshes category labels
+- `fred_new_series_backfill` DAG rewritten: sources from FRED_SELECTION, auto-deactivates series returning no data
+
+### Invalid series corrections
+- 15 wave 4–6 IDs invalid (invented, not in FRED): replaced 11 with catalog-confirmed IDs, removed 4 (Richmond/KC not on FRED)
+- 3 additional IDs invalid in original dict: BAMLH0A3HYM2→BAMLH0A3HYC, DFII2 removed (no 2Y TIPS), GOLDAMGBD228NLBM removed (not in catalog)
+- Net: 197 active selections, all confirmed in FRED catalog
+
+### Waves 4–6 (corrected series, all backfilled)
+- Wave 4 (8 valid): GACDFSA/NOCDFSA/PPCDFSA/NECDFSA/SHCDFSA (Philly Fed), BACTSAMFRBDAL/PRODSAMFRBDAL/NEMPSAMFRBDAL (Dallas Fed)
+- Wave 5 (8): GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, FYFRGDA188S
+- Wave 6 (8): USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, LTDACBM027NBOG, EQTA
+
+### Catalog-wide expansion (in progress)
+4 popularity-tier batches adding ~5,900 additional series from FRED catalog:
+- Batch 1: pop ≥ 70 (~93 series) — running
+- Batch 2: pop 50–69 (~498 series) — queued
+- Batch 3: pop 30–49 (~1,546 series) — queued
+- Batch 4: pop 15–29 (~3,757 series) — queued
+Validate each batch: count rows in MACRO_INDICATORS by new series_ids, then `dbt build --select fact_macro_readings --full-refresh`
 
 ## Security fixes applied (May 2026)
 - SQL injection: `get_max_date`/`get_min_date` use `_validate_table_name()` whitelist
@@ -351,15 +378,14 @@ dbt build --profiles-dir .
 
 ## Backfill status (as of May 2026)
 - **Price backfill:** COMPLETE — RAW.PRICES has ~9.2M rows, 2010–present, ~1,619 tickers
-- **FRED macro backfill:** COMPLETE — 175 series loaded; `fred_new_series_backfill` DAG ran successfully adding ~80 new series; `fact_macro_readings` full-refresh completed (208,406 rows, all 3 tests pass)
+- **FRED macro backfill:** 197 curated series fully loaded; catalog-wide expansion in progress (Batch 1 of 4 running); `fact_macro_readings` needs full-refresh after each batch completes
 - **Fundamentals:** COMPLETE — equity_daily completed for all ~1,619 tickers
-- **FRED catalog:** Confirm row counts — RAW.FRED_RELEASES should be ~300, RAW.FRED_SERIES_CATALOG ~50K+
+- **FRED catalog:** RAW.FRED_SERIES_CATALOG has ~800K rows; FRED_SELECTION has 197 active entries
 
 ## Next steps
-1. Open PR: `fred-series-expansion` → `main`
-2. GitHub branch protection rules on `main`
-3. Update chart_agent.py system prompt with supplemental table schemas
-4. Historical valuation ratios dbt model (prices x fundamentals, avoids look-ahead bias)
-5. FRED Wave 4 series: regional Fed manufacturing surveys (Philly, Richmond, Dallas, Kansas City)
-6. FRED Wave 5 series: government finance (debt, deficit, expenditures)
-7. dbt models for supplemental tables (dividends, earnings, analyst)
+1. Complete FRED catalog expansion: run Batches 2–4 after Batch 1 validates; run `dbt build --select fact_macro_readings --full-refresh` after each
+2. Open PR: `fred-waves-4-6` → `fred-series-expansion` → `main`
+3. GitHub branch protection rules on `main`
+4. Update chart_agent.py system prompt with supplemental table schemas
+5. Historical valuation ratios dbt model (prices x fundamentals, avoids look-ahead bias)
+6. dbt models for supplemental tables (dividends, earnings, analyst)
