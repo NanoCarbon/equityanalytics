@@ -326,6 +326,14 @@ dbt build --profiles-dir .
   - `extract_dividends_and_splits`, `extract_earnings_history`, `extract_analyst_recommendations`, `extract_analyst_price_targets`: pause 15s every 150 tickers
   - `extract_financial_statements`: already had batch pauses
 
+## FRED expansion — waves 4–6 (branch: fred-waves-4-6)
+- Added 28 new series to `ingestion/extract_fred.py`: 175 → 203 total
+- Wave 4 (12): Philly Fed (PHFRBIND/NDI/P/E/SIP), Richmond (RMBSIICS/E), Dallas (DALLASMI/PE/EO), KC (KANSASMI/PE)
+- Wave 5 (8): Federal fiscal — GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, HBFRGDP
+- Wave 6 (8): Banking profitability — USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, DTCTMFNM, EQTATOA
+- `fred_new_series_backfill` DAG triggered — appends full history for new series only, never touches existing data
+- After backfill completes: `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
+
 ## Security fixes applied (May 2026)
 - SQL injection: `get_max_date`/`get_min_date` use `_validate_table_name()` whitelist
 - Snowflake auth: replaced programmatic access token (SNOWFLAKE_TOKEN) with RSA key-pair

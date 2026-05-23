@@ -312,6 +312,63 @@ FRED_SERIES = {
     "TERMCBCCALLNS": "Credit Card Interest Rate (All Accounts)",
     "WRMFNS":        "Retail Money Market Funds",
     "COMPOUT":       "Commercial Paper Outstanding",
+
+    # ══════════════════════════════════════════════════════════════
+    # WAVE 4 — Regional Fed Manufacturing Surveys
+    # Philly, Richmond, Dallas, KC monthly diffusion indices
+    # (Empire State NY Fed already loaded: GACDISA066MSFRBNY)
+    # ══════════════════════════════════════════════════════════════
+
+    # Philadelphia Fed Business Outlook Survey (3rd District, monthly)
+    "PHFRBIND":    "Philly Fed: General Activity Index",
+    "PHFRBNDI":    "Philly Fed: New Orders Index",
+    "PHFRBP":      "Philly Fed: Prices Paid Index",
+    "PHFRBE":      "Philly Fed: Employment Index",
+    "PHFRBSIP":    "Philly Fed: Shipments Index",
+
+    # Richmond Fed Manufacturing Survey (5th District, monthly)
+    "RMBSIICS":    "Richmond Fed: Business Conditions Index",
+    "RMBSIE":      "Richmond Fed: Employment Index",
+
+    # Dallas Fed Manufacturing Outlook Survey (11th District, monthly)
+    "DALLASMI":    "Dallas Fed: General Business Activity",
+    "DALLASPE":    "Dallas Fed: Production Volume",
+    "DALLASEO":    "Dallas Fed: Employment",
+
+    # Kansas City Fed Manufacturing Survey (10th District, monthly)
+    "KANSASMI":    "Kansas City Fed: Manufacturing Activity",
+    "KANSASPE":    "Kansas City Fed: Production",
+
+    # ══════════════════════════════════════════════════════════════
+    # WAVE 5 — Government Finance / Fiscal
+    # Federal debt, deficit, expenditures — previously zero coverage
+    # ══════════════════════════════════════════════════════════════
+
+    "GFDEBTN":       "Federal Debt: Gross Federal Debt Outstanding",
+    "GFDEGDQ188S":   "Federal Debt as Percent of GDP",
+    "MTSDS133FMS":   "Monthly Treasury Statement: Surplus or Deficit",
+    "MTSO133FMS":    "Monthly Treasury Statement: Total Receipts",
+    "FGEXPND":       "Federal Government Current Expenditures",
+    "GGSAVE":        "Government Net Saving",
+    "FYONGDA188S":   "Federal Net Outlays as Percent of GDP",
+    "HBFRGDP":       "Federal Revenue as Percent of GDP",
+
+    # ══════════════════════════════════════════════════════════════
+    # WAVE 6 — Banking Profitability & Deposits
+    # NIM, ROE, ROA plus deposit flows and delinquency gaps
+    # Note: DRCCLACBS (credit cards), DRSFRMACBS (mortgages),
+    #       DRBLACBS (business), BUSLOANS, LOANS, DPSACBW027SBOG,
+    #       WTREGEN already loaded — adding profitability + gaps.
+    # ══════════════════════════════════════════════════════════════
+
+    "USNIM":       "Net Interest Margin: All U.S. Banks",
+    "USROE":       "Return on Equity: All U.S. Banks",
+    "USROA":       "Return on Assets: All U.S. Banks",
+    "DRCLACBS":    "Consumer Loan Delinquency Rate: All Commercial Banks",
+    "WDTGAL":      "Total Deposits at All Commercial Banks",
+    "DPRIME":      "Bank Prime Loan Rate",
+    "DTCTMFNM":    "Large Time Deposits at Commercial Banks",
+    "EQTATOA":     "Bank Equity to Total Assets: All Commercial Banks",
 }
 
 # Series that require a paid FRED subscription — excluded to avoid 403 errors
