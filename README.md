@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 197+ Federal Reserve macro indicators (catalog-driven, expanding), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 788+ Federal Reserve macro indicators (catalog-driven, expanding), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -36,7 +36,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 | Layer | Tool | Purpose |
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
-| Ingestion | Python + FRED API | 197+ FRED macro series (catalog-driven selection) + full FRED series catalog |
+| Ingestion | Python + FRED API | 788+ FRED macro series (catalog-driven selection) + full FRED series catalog |
 | Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
@@ -71,7 +71,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 
 Series selection is **catalog-driven**: `RAW.FRED_SELECTION` is the canonical source of truth for which series to extract. The `FRED_SERIES` dict in `extract_fred.py` is a local fallback name map only. To add or remove series, update `FRED_SELECTION` directly and trigger `fred_new_series_backfill`. Premium index series (SP500, NASDAQCOM, DJIA) require a paid FRED subscription and are auto-deactivated on first backfill.
 
-**197 curated series** across 15 categories (confirmed valid against FRED catalog). Expanding to high-popularity catalog series in 4 batches:
+**788 active series** across all FRED categories, driven by `RAW.FRED_SELECTION`. Started from 197 curated series; expanded to catalog-wide coverage via popularity-tier batches (Batches 1–2 complete, Batches 3–4 queued). Sample categories:
 
 - **Interest rates** (14) — DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, full Treasury curve DGS1MO → DGS30
 - **Yield curve & spreads** (17) — T10Y2Y, T10Y3M, DFII5–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
@@ -668,7 +668,7 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 | Category | Series | Key examples |
 |---|---|---|
 | Interest rates | 14 | DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, DGS1MO → DGS30 (full curve) |
-| Yield curve & spreads | 18 | T10Y2Y, T10Y3M, DFII2–DFII30 (TIPS), T10YFFM, AAAFF, BAAFF, TEDRATE, HQMCB |
+| Yield curve & spreads | 17 | T10Y2Y, T10Y3M, DFII5–DFII30 (TIPS), T10YFFM, AAAFF, BAAFF, TEDRATE, HQMCB |
 | Inflation | 20 | CPI/PCE/PPI, CPI sub-components (housing/energy/medical/transport), Atlanta Fed sticky/flexible CPI |
 | Labor market | 26 | UNRATE, U6RATE, PAYEMS, JOLTS (openings/hires/quits/layoffs), sector payrolls, productivity, ULC |
 | GDP & growth | 15 | GDP, GDPC1, GDPPOT, INDPRO, TCU, DGORDER, ISRATIO, CFNAI, CFNAIMA3 |
@@ -679,10 +679,10 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 | Trade & FX | 15 | Exports/imports, export prices, DTWEXBGS, USD/EUR/JPY/GBP/CNY/CAD/BRL/KRW/INR/MXN |
 | Energy & commodities | 12 | WTI, Brent, natural gas, gold, copper, nickel, iron ore, wheat, corn, cotton |
 | Market indicators | 4 | VIXCLS, USREC, USRECM, Empire State manufacturing (GACDISA) |
-| Regional Fed manufacturing *(Wave 4)* | 12 | Philly (PHFRBIND/NDI/P/E/SIP), Richmond (RMBSIICS/E), Dallas (DALLASMI/PE/EO), KC (KANSASMI/PE) |
-| Government finance & fiscal *(Wave 5)* | 8 | GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, HBFRGDP |
+| Regional Fed manufacturing *(Wave 4)* | 8 | Philly (GACDFSA/NOCDFSA/PPCDFSA/NECDFSA/SHCDFSA), Dallas (BACTSAMFRBDAL/PRODSAMFRBDAL/NEMPSAMFRBDAL) |
+| Government finance & fiscal *(Wave 5)* | 8 | GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, FYFRGDA188S |
 | Banking profitability & deposits *(Wave 6)* | 8 | USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, LTDACBM027NBOG, EQTA |
-| **Total** | **203** | |
+| **Curated total (pre-expansion)** | **197** | Catalog-driven expansion adds ~5,900 more series across 4 popularity tiers |
 
 ---
 
@@ -697,12 +697,12 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 
 Series selection is now catalog-driven via `RAW.FRED_SELECTION`. The wave model below is replaced by **popularity-tier batches** — new series are added in bulk from `FRED_SERIES_CATALOG` by popularity score, confirmed valid, inserted into `FRED_SELECTION`, and backfilled.
 
-| Batch | Popularity | Catalog count | Status |
-|---|---|---|---|
-| Batch 1 | ≥ 70 | ~93 | Running |
-| Batch 2 | 50–69 | ~498 | Queued |
-| Batch 3 | 30–49 | ~1,546 | Queued |
-| Batch 4 | 15–29 | ~3,757 | Queued |
+| Batch | Popularity | New series seeded | Cumulative RAW rows | Cumulative active selections | Status |
+|---|---|---|---|---|---|
+| Batch 1 | ≥ 70 | 93 | ~836K | 290 | ✅ Complete |
+| Batch 2 | 50–69 | 498 | 1,295,017 | 788 | ✅ Complete |
+| Batch 3 | 30–49 | ~1,546 | — | ~2,334 | Queued |
+| Batch 4 | 15–29 | ~3,757 | — | ~6,091 | Queued |
 
 Series marked DISCONTINUED in FRED are auto-deactivated after each monthly catalog refresh. Premium series (403) are auto-deactivated after the first backfill attempt.
 

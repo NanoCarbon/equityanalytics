@@ -56,15 +56,16 @@ EQUITY_ANALYTICS
   - All three index lists scraped live from Wikipedia on every DAG run (auto-picks up rebalances)
   - Static fallback lists built into extract.py for all three indices
   - Universe confirmed: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~116, total ~1,619 unique
-- 197 FRED macro series (catalog-driven, expanding via popularity-tier batches)
+- 788 active FRED macro series (catalog-driven, expanding via popularity-tier batches)
   - **Architecture change (May 2026):** `FRED_SERIES` Python dict is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical source of which series to extract — survives monthly catalog overwrites.
   - `get_selected_fred_series(conn)` in `extract_fred.py` reads from `FRED_SELECTION`; all three extraction DAGs use it at runtime
   - Monthly `fred_catalog_refresh` auto-deactivates selections whose series_id disappears from FRED; refreshes category from latest release_name
   - `fred_new_series_backfill` DAG sources from `FRED_SELECTION - MACRO_INDICATORS`; auto-deactivates series returning no data (invalid ID or premium)
   - 15 invalid wave 4–6 series IDs corrected or removed: PHFRBIND→GACDFSA066MSFRBPHI, DALLASMI→BACTSAMFRBDAL, HBFRGDP→FYFRGDA188S, DTCTMFNM→LTDACBM027NBOG, EQTATOA→EQTA; Richmond/KC Fed not available in catalog (removed)
   - 3 additional invalid IDs removed: BAMLH0A3HYM2→BAMLH0A3HYC, DFII2 (no 2Y TIPS in FRED), GOLDAMGBD228NLBM (not in catalog)
-  - Net selection: 197 active series, all confirmed in FRED catalog
+  - Net curated selection: 197 active series (all confirmed in FRED catalog) — now expanded to 788 via Batches 1 and 2
   - Expanding to catalog-wide high-value series in 4 batches (pop≥70, 50-69, 30-49, 15-29 → ~5,900 additional series)
+  - Batches 1 (93 series, pop≥70) and 2 (498 series, pop 50-69) complete; Batches 3–4 queued
   - VW_FRED_HYGIENE view in RAW schema: per-series latest/prev observation date + row count for duplicate detection
 - Financial statements: income statement, balance sheet, cash flow (annual + quarterly)
   - EAV format in RAW/staging, pivoted to ~35 named columns in marts
@@ -88,7 +89,7 @@ when the operator can monitor them locally.
 | DAG | Schedule | Cron | File | Description |
 |---|---|---|---|---|
 | `equity_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_equity_daily.py | Prices + company info (incremental) |
-| `macro_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_macro_daily.py | 175 FRED macro series (incremental append, auto-picks up new series) |
+| `macro_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_macro_daily.py | 788+ FRED macro series (reads FRED_SELECTION at runtime, incremental append, auto-picks up new series) |
 | `fundamentals_weekly` | 11pm ET Saturday | `0 4 * * 0` | dag_fundamentals.py | Financial statements (full overwrite) |
 | `valuation_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_fundamentals.py | Valuation snapshot (daily append) |
 | `equity_supplemental_weekly` | 11pm ET Saturday | `0 4 * * 0` | dag_equity_supplemental.py | Dividends, earnings, analyst data |
@@ -355,10 +356,14 @@ dbt build --profiles-dir .
 
 ### Catalog-wide expansion (in progress)
 4 popularity-tier batches adding ~5,900 additional series from FRED catalog:
-- Batch 1: pop ≥ 70 (~93 series) — running
-- Batch 2: pop 50–69 (~498 series) — queued
-- Batch 3: pop 30–49 (~1,546 series) — queued
-- Batch 4: pop 15–29 (~3,757 series) — queued
+
+| Batch | Popularity | Series seeded | Cumulative active | Cumulative RAW rows | Mart rows | Status |
+|---|---|---|---|---|---|---|
+| Batch 1 | pop ≥ 70 | 93 | 290 | ~836K | 315,675 | ✅ Complete |
+| Batch 2 | pop 50–69 | 498 | 788 | 1,295,017 | 563,975 | ✅ Complete |
+| Batch 3 | pop 30–49 | ~1,546 | ~2,334 | — | — | Queued |
+| Batch 4 | pop 15–29 | ~3,757 | ~6,091 | — | — | Queued |
+
 Validate each batch: count rows in MACRO_INDICATORS by new series_ids, then `dbt build --select fact_macro_readings --full-refresh`
 
 ## Security fixes applied (May 2026)
@@ -378,12 +383,12 @@ Validate each batch: count rows in MACRO_INDICATORS by new series_ids, then `dbt
 
 ## Backfill status (as of May 2026)
 - **Price backfill:** COMPLETE — RAW.PRICES has ~9.2M rows, 2010–present, ~1,619 tickers
-- **FRED macro backfill:** 197 curated series fully loaded; catalog-wide expansion in progress (Batch 1 of 4 running); `fact_macro_readings` needs full-refresh after each batch completes
+- **FRED macro backfill:** Batches 1 and 2 complete — 788 active series, 1,295,017 RAW rows, 563,975 mart rows; Batches 3–4 queued
 - **Fundamentals:** COMPLETE — equity_daily completed for all ~1,619 tickers
-- **FRED catalog:** RAW.FRED_SERIES_CATALOG has ~800K rows; FRED_SELECTION has 197 active entries
+- **FRED catalog:** RAW.FRED_SERIES_CATALOG has ~800K rows; FRED_SELECTION has 788 active entries (197 curated + 93 Batch 1 + 498 Batch 2)
 
 ## Next steps
-1. Complete FRED catalog expansion: run Batches 2–4 after Batch 1 validates; run `dbt build --select fact_macro_readings --full-refresh` after each
+1. Complete FRED catalog expansion: seed and trigger Batches 3–4; run `dbt build --select fact_macro_readings --full-refresh` after each
 2. Open PR: `fred-waves-4-6` → `fred-series-expansion` → `main`
 3. GitHub branch protection rules on `main`
 4. Update chart_agent.py system prompt with supplemental table schemas
