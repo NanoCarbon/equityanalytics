@@ -1,11 +1,39 @@
 version: 2
 
 models:
+
+  - name: dim_date
+    description: "Calendar dimension spanning 2009 to present. Grain: date_key."
+    columns:
+      - name: date_key
+        tests:
+          - not_null
+          - unique
+      - name: year
+        tests:
+          - not_null
+      - name: is_weekday
+        tests:
+          - not_null
+
+  - name: dim_security
+    description: "One row per unique security with company metadata. Grain: ticker."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - unique
+      - name: sector
+        tests:
+          - not_null
+
   - name: fact_daily_prices
     description: >
       Daily price and return metrics per security.
       Grain: ticker + price_date.
-      Clustered by price_date, ticker for efficient date-range scans.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, price_date]
     columns:
       - name: ticker
         tests:
@@ -23,28 +51,21 @@ models:
         tests:
           - not_null
 
-  - name: dim_security
-    description: "One row per unique security with company metadata."
+  - name: fact_macro_readings
+    description: >
+      Macro indicator observations from FRED.
+      Grain: series_id + observation_date.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [series_id, observation_date]
     columns:
-      - name: ticker
+      - name: series_id
         tests:
           - not_null
-          - unique
-      - name: sector
+      - name: observation_date
         tests:
           - not_null
-
-  - name: dim_date
-    description: "Calendar dimension spanning 2009 to present."
-    columns:
-      - name: date_key
-        tests:
-          - not_null
-          - unique
-      - name: year
-        tests:
-          - not_null
-      - name: is_weekday
+      - name: value
         tests:
           - not_null
 
@@ -52,8 +73,9 @@ models:
     description: >
       Pivoted financial statement data.
       Grain: ticker + period_end_date + frequency.
-      Contains income statement, balance sheet, and cash flow line items as columns.
-      Clustered by ticker, period_end_date.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, period_end_date, frequency]
     columns:
       - name: ticker
         tests:
@@ -71,27 +93,13 @@ models:
     description: >
       Point-in-time valuation ratios and metrics.
       Grain: ticker + snapshot_date.
-      Daily snapshots enable time-series analysis of PE, margins, etc.
-      Clustered by snapshot_date, ticker.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
     columns:
       - name: ticker
         tests:
           - not_null
       - name: snapshot_date
-        tests:
-          - not_null
-
-  - name: fact_macro_readings
-    description: >
-      Macro indicator observations from FRED.
-      Grain: series_id + observation_date.
-    columns:
-      - name: series_id
-        tests:
-          - not_null
-      - name: observation_date
-        tests:
-          - not_null
-      - name: value
         tests:
           - not_null

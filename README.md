@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 788+ Federal Reserve macro indicators (catalog-driven, expanding), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 6,100+ Federal Reserve macro indicators (catalog-driven, fully expanded), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -36,7 +36,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 | Layer | Tool | Purpose |
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
-| Ingestion | Python + FRED API | 788+ FRED macro series (catalog-driven selection) + full FRED series catalog |
+| Ingestion | Python + FRED API | 6,100+ FRED macro series (catalog-driven, fully expanded) + full FRED series catalog |
 | Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
@@ -71,7 +71,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 
 Series selection is **catalog-driven**: `RAW.FRED_SELECTION` is the canonical source of truth for which series to extract. The `FRED_SERIES` dict in `extract_fred.py` is a local fallback name map only. To add or remove series, update `FRED_SELECTION` directly and trigger `fred_new_series_backfill`. Premium index series (SP500, NASDAQCOM, DJIA) require a paid FRED subscription and are auto-deactivated on first backfill.
 
-**788 active series** across all FRED categories, driven by `RAW.FRED_SELECTION`. Started from 197 curated series; expanded to catalog-wide coverage via popularity-tier batches (Batches 1–2 complete, Batches 3–4 queued). Sample categories:
+**6,100 active series** across all FRED categories, driven by `RAW.FRED_SELECTION`. Started from 197 curated series; expanded to catalog-wide coverage via four popularity-tier batches (all complete). Sample categories:
 
 - **Interest rates** (14) — DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, full Treasury curve DGS1MO → DGS30
 - **Yield curve & spreads** (17) — T10Y2Y, T10Y3M, DFII5–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
@@ -137,11 +137,19 @@ EQUITY_ANALYTICS
 │   ├── FRED_SELECTION          -- canonical selection: which series to extract (persists across refreshes)
 │   └── VW_FRED_HYGIENE         -- view: latest/prev obs date + row-count per series (duplicate detector)
 ├── STAGING (views)
-│   ├── STG_PRICES
+│   ├── STG_TICKER_UNIVERSE
+│   ├── STG_PRICES              -- QUALIFY dedup on (ticker, price_date)
 │   ├── STG_COMPANIES
-│   ├── STG_MACRO_INDICATORS
+│   ├── STG_MACRO_INDICATORS    -- QUALIFY dedup on (series_id, observation_date)
 │   ├── STG_FINANCIAL_STATEMENTS
-│   └── STG_VALUATION_METRICS
+│   ├── STG_VALUATION_METRICS
+│   ├── STG_DIVIDENDS_AND_SPLITS
+│   ├── STG_EARNINGS_HISTORY
+│   ├── STG_ANALYST_RECOMMENDATIONS
+│   ├── STG_ANALYST_PRICE_TARGETS
+│   ├── STG_FRED_SELECTION
+│   ├── STG_FRED_RELEASES
+│   └── STG_FRED_SERIES_CATALOG
 ├── INTERMEDIATE (views)
 │   ├── INT_DAILY_RETURNS
 │   └── INT_FUNDAMENTALS_PIVOTED
@@ -173,7 +181,7 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 
 **`macro_daily`** — schedule `0 4 * * 2-6` (11pm ET Mon–Fri)
 - Reads active series at runtime from `RAW.FRED_SELECTION` (joined to catalog) — no code changes needed to add or remove series
-- Incremental append: queries `MAX(date)` already loaded and fetches only newer observations (with a 7-day overlap to catch FRED revisions)
+- 6,100 active series; incremental append with a 7-day overlap to catch FRED revisions
 - Falls back to 30-day lookback if the table is empty
 
 **`fundamentals_weekly`** — schedule `0 4 * * 0` (11pm ET Saturday)
@@ -219,11 +227,19 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 dbt models follow a strict three-tier architecture:
 
 **Staging** — one model per source. Cleans types, renames columns, handles nulls. No business logic.
-- `stg_prices` — converts Unix nanosecond timestamps to dates, casts price fields
+- `stg_ticker_universe` — passthrough from PK-enforced RAW table; canonical ticker list
+- `stg_prices` — converts Unix nanosecond timestamps to dates, casts price fields, QUALIFY dedup on (ticker, price_date) to clean RAW append-only overlap
 - `stg_companies` — standardizes sector/industry, coalesces nulls to 'Unknown'
-- `stg_macro_indicators` — converts timestamps, casts values
+- `stg_macro_indicators` — converts timestamps, casts values, QUALIFY dedup on (series_id, observation_date)
 - `stg_financial_statements` — converts timestamps, casts values, filters nulls
 - `stg_valuation_metrics` — renames camelCase yfinance fields to snake_case columns
+- `stg_dividends_and_splits` — converts epoch, filters zero-value rows, grain: ticker + action_date
+- `stg_earnings_history` — converts quarter epoch to date, grain: ticker + period_date
+- `stg_analyst_recommendations` — quotes `"INDEX"` reserved keyword → period_index, grain: ticker + period + period_index
+- `stg_analyst_price_targets` — quotes `"CURRENT"` reserved keyword → current_target, grain: ticker + snapshot_date
+- `stg_fred_selection` — passthrough from PK-enforced RAW table; canonical FRED series selection
+- `stg_fred_releases` — FRED release metadata, grain: release_id
+- `stg_fred_series_catalog` — full FRED series universe (~800K rows), configured as view
 
 **Intermediate** — reusable business logic building blocks.
 - `int_daily_returns` — daily return via LAG window function, 30-day annualized rolling volatility, 52-week high/low range
@@ -239,20 +255,25 @@ dbt models follow a strict three-tier architecture:
 
 ### Data Quality
 
-25+ automated dbt tests across three layers:
+100+ automated dbt tests across three layers. Clean `dbt build` result: PASS=108, WARN=1, ERROR=0.
 
-**Staging tests** — not_null on critical columns, unique ticker in company model, accepted_values on statement_type and frequency
+**Staging tests** — `dbt_utils.unique_combination_of_columns` composite grain tests on all 8 multi-column-grain staging models. `not_null` on critical columns, `unique` on single-column PKs, `accepted_values` on statement_type, frequency, and ticker source.
 
-**Mart tests** — not_null on all fact columns, unique + not_null on dimension keys, referential integrity
+**Mart tests** — `dbt_utils.unique_combination_of_columns` composite grain tests on all four fact tables. `not_null` on all fact columns, `unique` + `not_null` on dimension keys.
 
 **Singular business rule tests**
+- `assert_daily_prices_freshness` — MAX(price_date) is within 3 trading days of today
+- `assert_macro_readings_freshness` — MAX(observation_date) is recent
+- `assert_fundamentals_freshness` — pipeline loaded data within 10 days (checks stg_financial_statements.extracted_at)
+- `assert_price_coverage_by_ticker` — no individual ticker is >5 trading days behind the overall max
+- `assert_return_bounds` — WARN on daily returns exceeding ±200% (CHRD 2020-11-20 excluded as confirmed merger artifact)
 - `assert_no_future_prices` — no price dates beyond today
-- `assert_return_bounds` — no daily return exceeding +-50%
-- `assert_no_negative_prices` — no close price <= 0
+- `assert_no_negative_prices` — no close price ≤ 0
 - `assert_no_negative_volume` — no volume < 0
 - `assert_no_future_fundamentals` — no period_end_date beyond today
 - `assert_no_negative_revenue` — no total_revenue < 0
 - `assert_no_negative_assets` — no total_assets < 0
+- `assert_price_history_unchanged` — immutability check on historical prices
 
 ### Database Health Check
 
@@ -399,8 +420,13 @@ equityanalytics/
 │   └── plugins/                          # Custom operators (future)
 ├── dbt_project/
 │   ├── models/
-│   │   ├── staging/              # stg_prices, stg_companies, stg_macro_indicators,
-│   │   │                         #   stg_financial_statements, stg_valuation_metrics
+│   │   ├── staging/              # 13 staging models — one per RAW source table
+│   │   │                         #   stg_ticker_universe, stg_prices (QUALIFY dedup),
+│   │   │                         #   stg_companies, stg_macro_indicators (QUALIFY dedup),
+│   │   │                         #   stg_financial_statements, stg_valuation_metrics,
+│   │   │                         #   stg_dividends_and_splits, stg_earnings_history,
+│   │   │                         #   stg_analyst_recommendations, stg_analyst_price_targets,
+│   │   │                         #   stg_fred_selection, stg_fred_releases, stg_fred_series_catalog
 │   │   ├── intermediate/         # int_daily_returns, int_fundamentals_pivoted
 │   │   └── marts/                # dim_date, dim_security, fact_daily_prices,
 │   │                             #   fact_macro_readings, fact_fundamentals, fact_valuation_snapshot
@@ -707,8 +733,10 @@ Series selection is now catalog-driven via `RAW.FRED_SELECTION`. The wave model 
 |---|---|---|---|---|---|
 | Batch 1 | ≥ 70 | 93 | ~836K | 290 | ✅ Complete |
 | Batch 2 | 50–69 | 498 | 1,295,017 | 788 | ✅ Complete |
-| Batch 3 | 30–49 | ~1,546 | — | ~2,334 | Queued |
-| Batch 4 | 15–29 | ~3,757 | — | ~6,091 | Queued |
+| Batch 3 | 30–49 | 1,546 | ~1.7M | 2,334 | ✅ Complete |
+| Batch 4 | 15–29 | 3,765 | 4,100,030 | 6,100 | ✅ Complete |
+
+All 4 popularity-tier batches are complete. `fact_macro_readings` mart contains **1,836,249 rows** across **6,032 unique series** (68 series have all observations outside the 2009–present dim_date window). Total active selections: **6,100** across 4,101 FRED release categories.
 
 Series marked DISCONTINUED in FRED are auto-deactivated after each monthly catalog refresh. Premium series (403) are auto-deactivated after the first backfill attempt.
 

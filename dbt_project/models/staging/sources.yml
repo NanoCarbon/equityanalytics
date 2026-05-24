@@ -5,13 +5,77 @@ sources:
     database: EQUITY_ANALYTICS
     schema: RAW
     tables:
+
+      # ── Ticker data ────────────────────────────────────────────────────────────
+      - name: ticker_universe
+        description: >
+          Canonical ticker list. Grain: ticker (PK-enforced).
+          FK parent for all 8 RAW ticker tables. Synced nightly from Wikipedia
+          by ticker_universe_sync DAG; soft-deletes removed tickers (is_active=FALSE)
+          so historical FK references remain valid.
+
       - name: prices
-        description: "Raw daily OHLCV price data from yfinance"
+        description: >
+          Raw daily OHLCV price data from yfinance. Grain (intended): ticker + price_date.
+          Append-only with a 5-day overlap window — duplicates on (ticker, price_date)
+          are expected and cleaned at the staging layer via QUALIFY.
+
       - name: company_info
-        description: "Raw company metadata from yfinance"
-      - name: macro_indicators
-        description: "Raw macro economic indicators from FRED API"
+        description: >
+          Raw company metadata from yfinance. Grain: ticker.
+          Full overwrite on every run — always reflects the current snapshot.
+
       - name: financial_statements
-        description: "Raw financial statement data from yfinance (EAV format: income stmt, balance sheet, cash flow)"
+        description: >
+          Raw financial statement data in EAV format. Grain: ticker + statement_type
+          + frequency + period_end_date + line_item.
+          Full overwrite weekly to capture retroactive restatements.
+
       - name: valuation_metrics
-        description: "Raw point-in-time valuation ratios and metrics from yfinance .info"
+        description: >
+          Raw point-in-time valuation ratios (PE, P/B, margins, etc.) from yfinance.info.
+          Grain: ticker + snapshot_date. Daily append — builds a time series.
+
+      - name: dividends_and_splits
+        description: >
+          Full corporate action history (dividends, stock splits) from yfinance.
+          Grain: ticker + action_date. Full overwrite weekly.
+
+      - name: earnings_history
+        description: >
+          EPS actuals vs. analyst estimates per fiscal quarter.
+          Grain: ticker + period_date. Full overwrite weekly (~8–20 quarters per ticker).
+
+      - name: analyst_recommendations
+        description: >
+          Analyst consensus counts (strong buy / buy / hold / sell / strong sell)
+          by period (last 4 months). Grain: ticker + period + period_index.
+          Full overwrite weekly.
+
+      - name: analyst_price_targets
+        description: >
+          Weekly consensus price target snapshot (current / high / low / mean / median).
+          Grain: ticker + snapshot_date. Weekly append — builds a time series.
+
+      # ── FRED macro data ────────────────────────────────────────────────────────
+      - name: macro_indicators
+        description: >
+          Raw FRED macro indicator observations. Grain (intended): series_id + observation_date.
+          Append-only with a 7-day overlap window — 6 known duplicates cleaned at
+          staging layer via QUALIFY.
+
+      - name: fred_selection
+        description: >
+          Canonical list of FRED series to extract. Grain: series_id (PK-enforced).
+          Persists across monthly catalog overwrites. is_active=FALSE for deactivated series.
+
+      - name: fred_releases
+        description: >
+          FRED statistical release metadata (~300 rows). Grain: release_id.
+          Full overwrite monthly by fred_catalog_refresh DAG.
+
+      - name: fred_series_catalog
+        description: >
+          Full FRED series universe (~800K rows). Grain: series_id.
+          Full overwrite monthly — the information schema for FRED.
+          Use to discover series; RAW.FRED_SELECTION drives actual extraction.

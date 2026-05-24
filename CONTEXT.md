@@ -61,16 +61,20 @@ EQUITY_ANALYTICS
   - FK constraints from all 8 RAW ticker tables (PRICES, COMPANY_INFO, FINANCIAL_STATEMENTS, VALUATION_METRICS, DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) → TICKER_UNIVERSE.ticker
   - Static fallback lists in extract.py used only when DB is unreachable
   - Universe: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~113, total 1,619 unique
-- 788 active FRED macro series (catalog-driven, expanding via popularity-tier batches)
+- **6,100 active FRED macro series** (catalog-driven, all 4 popularity-tier batches complete)
   - **Architecture change (May 2026):** `FRED_SERIES` Python dict is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical source of which series to extract — survives monthly catalog overwrites.
   - `get_selected_fred_series(conn)` in `extract_fred.py` reads from `FRED_SELECTION`; all three extraction DAGs use it at runtime
   - Monthly `fred_catalog_refresh` auto-deactivates selections whose series_id disappears from FRED; refreshes category from latest release_name
   - `fred_new_series_backfill` DAG sources from `FRED_SELECTION - MACRO_INDICATORS`; auto-deactivates series returning no data (invalid ID or premium)
   - 15 invalid wave 4–6 series IDs corrected or removed: PHFRBIND→GACDFSA066MSFRBPHI, DALLASMI→BACTSAMFRBDAL, HBFRGDP→FYFRGDA188S, DTCTMFNM→LTDACBM027NBOG, EQTATOA→EQTA; Richmond/KC Fed not available in catalog (removed)
   - 3 additional invalid IDs removed: BAMLH0A3HYM2→BAMLH0A3HYC, DFII2 (no 2Y TIPS in FRED), GOLDAMGBD228NLBM (not in catalog)
-  - Net curated selection: 197 active series (all confirmed in FRED catalog) — now expanded to 788 via Batches 1 and 2
-  - Expanding to catalog-wide high-value series in 4 batches (pop≥70, 50-69, 30-49, 15-29 → ~5,900 additional series)
-  - Batches 1 (93 series, pop≥70) and 2 (498 series, pop 50-69) complete; Batches 3–4 queued
+  - Net curated selection: 197 active series (all confirmed in FRED catalog) — expanded via 4 batches:
+    - Batch 1 (pop≥70): +93 series → 290 total ✅
+    - Batch 2 (pop 50-69): +498 series → 788 total ✅
+    - Batch 3 (pop 30-49): +1,546 series → 2,334 total ✅
+    - Batch 4 (pop 15-29): +3,765 series → 6,100 total ✅
+  - RAW.MACRO_INDICATORS: 4,100,030 rows, 6,100 distinct series
+  - fact_macro_readings mart: 1,836,249 rows, 6,032 distinct series (68 outside 2009-present dim_date window)
   - VW_FRED_HYGIENE view in RAW schema: per-series latest/prev observation date + row count for duplicate detection
 - Financial statements: income statement, balance sheet, cash flow (annual + quarterly)
   - EAV format in RAW/staging, pivoted to ~35 named columns in marts
@@ -215,13 +219,19 @@ docker compose exec airflow-webserver airflow tasks states-for-dag-run <dag_id> 
 - 3 new singular tests: no future fundamentals, no negative revenue, no negative assets
 
 ## dbt models
-- 13 models total across staging, intermediate, and marts layers
+- **21 models** total: 13 staging (views) + 2 intermediate (views) + 6 marts (tables)
 - Schema routing centralized in `dbt_project.yml` via `+schema:` — do NOT add
   `{{ config(schema='...') }}` to individual model files
 - Incremental materialization on all four fact tables
 - unique_key=['ticker', 'price_date'] on fact_daily_prices
 - unique_key=['ticker', 'period_end_date', 'frequency'] on fact_fundamentals
 - unique_key=['ticker', 'snapshot_date'] on fact_valuation_snapshot
+- **dbt_utils package** (v1.3.3) installed — `dbt_utils.unique_combination_of_columns` used for all composite grain tests in staging and marts schema.yml
+- **QUALIFY dedup** added to stg_prices and stg_macro_indicators to clean RAW append-only overlap at staging layer. This requires `--full-refresh` on fact_daily_prices and fact_macro_readings if pre-existing duplicates are present.
+- **test-paths** corrected in dbt_project.yml: `["dbt_project/tests"]` (was pointing to non-existent repo-root `tests/` directory — all 15 singular tests were dead code until this fix)
+- Clean build (May 2026): PASS=108, WARN=1 (assert_return_bounds ±200% threshold, investigative signal only), ERROR=0
+- New staging models (all views): stg_ticker_universe, stg_dividends_and_splits, stg_earnings_history, stg_analyst_recommendations, stg_analyst_price_targets, stg_fred_selection, stg_fred_releases, stg_fred_series_catalog
+- Snowflake reserved keyword pitfalls in staging: `"CURRENT"` (stg_analyst_price_targets), `"INDEX"` (stg_analyst_recommendations)
 
 ## Running dbt locally
 dbt Core does not auto-load `.env` — export env vars first:

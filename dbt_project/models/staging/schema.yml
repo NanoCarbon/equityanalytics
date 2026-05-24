@@ -1,8 +1,37 @@
 version: 2
 
 models:
+
+  # ── Ticker reference ──────────────────────────────────────────────────────────
+
+  - name: stg_ticker_universe
+    description: "Canonical ticker list. Grain: ticker."
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+          - unique
+      - name: source
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['sp500', 'sp400', 'sp600', 'etf', 'manual']
+      - name: is_active
+        tests:
+          - not_null
+      - name: is_equity
+        tests:
+          - not_null
+
+  # ── Price and company data ────────────────────────────────────────────────────
+
   - name: stg_prices
-    description: "Cleaned and typed price data from yfinance RAW layer."
+    description: >
+      Cleaned OHLCV price data. Grain: ticker + price_date.
+      Deduplicates RAW append-only overlaps via QUALIFY (latest extracted_at wins).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, price_date]
     columns:
       - name: ticker
         tests:
@@ -18,7 +47,7 @@ models:
           - not_null
 
   - name: stg_companies
-    description: "Cleaned company metadata from yfinance RAW layer."
+    description: "Cleaned company metadata. Grain: ticker."
     columns:
       - name: ticker
         tests:
@@ -28,21 +57,18 @@ models:
         tests:
           - not_null
 
-  - name: stg_macro_indicators
-    description: "Cleaned macro indicator data from FRED API."
-    columns:
-      - name: series_id
-        tests:
-          - not_null
-      - name: observation_date
-        tests:
-          - not_null
-      - name: value
-        tests:
-          - not_null
-
   - name: stg_financial_statements
-    description: "Cleaned financial statement data in EAV format. One row per ticker/statement/frequency/period/line_item."
+    description: >
+      Cleaned financial statement data in EAV format.
+      Grain: ticker + statement_type + frequency + period_end_date + line_item.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - ticker
+            - statement_type
+            - frequency
+            - period_end_date
+            - line_item
     columns:
       - name: ticker
         tests:
@@ -68,11 +94,126 @@ models:
           - not_null
 
   - name: stg_valuation_metrics
-    description: "Cleaned point-in-time valuation ratios. One row per ticker per snapshot date."
+    description: "Cleaned point-in-time valuation ratios. Grain: ticker + snapshot_date."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
     columns:
       - name: ticker
         tests:
           - not_null
       - name: snapshot_date
+        tests:
+          - not_null
+
+  # ── Supplemental equity data ──────────────────────────────────────────────────
+
+  - name: stg_dividends_and_splits
+    description: "Corporate actions (dividends + splits). Grain: ticker + action_date."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, action_date]
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: action_date
+        tests:
+          - not_null
+
+  - name: stg_earnings_history
+    description: "EPS actuals vs. estimates per fiscal quarter. Grain: ticker + period_date."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, period_date]
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: period_date
+        tests:
+          - not_null
+
+  - name: stg_analyst_recommendations
+    description: >
+      Analyst consensus counts by period and position.
+      Grain: ticker + period + period_index.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, period, period_index]
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: period
+        tests:
+          - not_null
+      - name: period_index
+        tests:
+          - not_null
+
+  - name: stg_analyst_price_targets
+    description: "Weekly consensus price target snapshot. Grain: ticker + snapshot_date."
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date]
+    columns:
+      - name: ticker
+        tests:
+          - not_null
+      - name: snapshot_date
+        tests:
+          - not_null
+
+  # ── FRED macro data ───────────────────────────────────────────────────────────
+
+  - name: stg_macro_indicators
+    description: >
+      Cleaned FRED macro observations. Grain: series_id + observation_date.
+      Deduplicates RAW append-only overlaps via QUALIFY (latest extracted_at wins).
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [series_id, observation_date]
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+      - name: observation_date
+        tests:
+          - not_null
+      - name: value
+        tests:
+          - not_null
+
+  - name: stg_fred_selection
+    description: "Active FRED series selection. Grain: series_id."
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+          - unique
+      - name: is_active
+        tests:
+          - not_null
+
+  - name: stg_fred_releases
+    description: "FRED statistical release metadata. Grain: release_id."
+    columns:
+      - name: release_id
+        tests:
+          - not_null
+          - unique
+      - name: release_name
+        tests:
+          - not_null
+
+  - name: stg_fred_series_catalog
+    description: "Full FRED series universe (~800K rows). Grain: series_id."
+    columns:
+      - name: series_id
+        tests:
+          - not_null
+          - unique
+      - name: title
         tests:
           - not_null
