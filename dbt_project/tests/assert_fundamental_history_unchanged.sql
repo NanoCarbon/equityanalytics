@@ -1,70 +1,67 @@
--- Assert that historical fundamental values have not changed for a fixed set of
--- anchor observations.
+-- Assert that core fundamental values are not null for a deterministic ~1% sample
+-- of equity tickers across their two most recent annual reporting periods.
 --
 -- PURPOSE
--- Financial statements use a full-overwrite load strategy precisely because
--- yfinance can return retroactively restated values. This test intentionally
--- does NOT catch all restatements — that would defeat the purpose of the overwrite.
--- Instead it catches unintended data corruption:
---   - A pipeline bug that zeros out or corrupts specific rows
---   - A dbt model change that alters how values are pivoted or cast
---   - A yfinance API change that renames line items, causing pivoted columns
---     to silently go null for historical periods
+-- Catches unintended data corruption across a broad, representative sample:
+--   - A pipeline bug that zeros out or corrupts pivoted columns
+--   - A dbt model change that causes pivoted columns to silently go null
+--   - A yfinance API change that renames line items, breaking the EAV pivot
+--   - Regression from changes to int_fundamentals_pivoted
 --
--- For annual periods, revenue and net_income are stable enough to baseline.
--- EPS is more volatile due to share count restatements — use with wider tolerance.
+-- SAMPLING STRATEGY
+-- ABS(HASH(ticker)) % 67 = 0 selects ~1/67 of tickers deterministically.
+-- From ~6,668 equities this yields ~100 tickers. The sample is stable across
+-- runs (same tickers selected every time) and requires no manual maintenance.
+-- Increase or decrease the modulus to adjust sample size.
 --
--- MAINTENANCE
--- Run the query below to populate baseline values after the initial backfill:
---
---   SELECT ticker, period_end_date, frequency,
---          ROUND(total_revenue, 0) AS total_revenue,
---          ROUND(net_income, 0)    AS net_income,
---          ROUND(diluted_eps, 4)   AS diluted_eps
---   FROM EQUITY_ANALYTICS.MARTS.FACT_FUNDAMENTALS
---   WHERE ticker IN ('AAPL', 'JPM', 'XOM')
---     AND frequency = 'annual'
---     AND period_end_date BETWEEN '2021-01-01' AND '2023-12-31'
---   ORDER BY ticker, period_end_date;
+-- VIOLATION CONDITION
+-- Both total_revenue AND net_income are null for a sampled ticker's recent period.
+-- A single null column is tolerable (some companies genuinely have no revenue or
+-- negative net income). Both null together strongly indicates a pivot failure.
 
-with expected_fundamentals as (
-    select * from (values
-        -- ticker,  period_end_date,      frequency,  exp_revenue,  exp_net_income,  exp_diluted_eps
-        ('AAPL', '2022-09-24'::date, 'annual', null::float, null::float, null::float),
-        ('AAPL', '2021-09-25'::date, 'annual', null::float, null::float, null::float),
-        ('JPM',  '2022-12-31'::date, 'annual', null::float, null::float, null::float),
-        ('JPM',  '2021-12-31'::date, 'annual', null::float, null::float, null::float),
-        ('XOM',  '2022-12-31'::date, 'annual', null::float, null::float, null::float),
-        ('XOM',  '2021-12-31'::date, 'annual', null::float, null::float, null::float)
-    ) as t (ticker, period_end_date, frequency, exp_revenue, exp_net_income, exp_diluted_eps)
-    where exp_revenue is not null  -- skip until baseline is populated
+with sampled_tickers as (
+    -- Deterministic ~1% sample of equity tickers present in fact_fundamentals
+    select distinct ticker
+    from {{ ref('fact_fundamentals') }}
+    where frequency = 'annual'
+    qualify abs(hash(ticker)) % 67 = 0
 ),
 
-violations as (
+recent_annual_periods as (
+    -- Two most recent annual periods per sampled ticker
     select
         f.ticker,
         f.period_end_date,
         f.frequency,
-        f.total_revenue      as actual_revenue,
-        e.exp_revenue        as expected_revenue,
-        f.net_income         as actual_net_income,
-        e.exp_net_income     as expected_net_income,
-        f.diluted_eps        as actual_diluted_eps,
-        e.exp_diluted_eps    as expected_diluted_eps
+        f.total_revenue,
+        f.net_income,
+        f.diluted_eps,
+        f.total_assets
     from {{ ref('fact_fundamentals') }} f
-    inner join expected_fundamentals e
-        on  f.ticker         = e.ticker
-        and f.period_end_date = e.period_end_date
-        and f.frequency      = e.frequency
+    inner join sampled_tickers s using (ticker)
+    where f.frequency = 'annual'
+    qualify row_number() over (
+        partition by f.ticker
+        order by f.period_end_date desc
+    ) <= 2
+),
+
+violations as (
+    select
+        ticker,
+        period_end_date,
+        frequency,
+        total_revenue,
+        net_income,
+        diluted_eps,
+        total_assets
+    from recent_annual_periods
     where
-        -- Revenue tolerance: 0.1% of expected (restatements are larger than rounding)
-        abs(f.total_revenue - e.exp_revenue) > abs(e.exp_revenue) * 0.001
+        -- Both income statement pivots null = strong signal of corruption or rename
+        (total_revenue is null and net_income is null)
         or
-        -- Net income tolerance: 0.1% (more volatile than revenue)
-        abs(f.net_income - e.exp_net_income) > abs(e.exp_net_income) * 0.001
-        or
-        -- EPS tolerance: 0.01 per share (covers minor share count restatements)
-        abs(f.diluted_eps - e.exp_diluted_eps) > 0.01
+        -- Balance sheet pivot also missing = full pivot failure
+        (total_revenue is null and total_assets is null)
 )
 
 select * from violations

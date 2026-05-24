@@ -58,7 +58,7 @@ DEFAULT_ARGS = {
 )
 def backfill_new_tickers():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def resolve_new_tickers() -> dict:
         """
         Diff the current universe against RAW.PRICES to find tickers with no
@@ -90,7 +90,7 @@ def backfill_new_tickers():
         logger.info("First 10 new tickers: %s", new_tickers[:10])
         return {"new_tickers": new_tickers, "already_loaded": len(already_loaded), "skip": False}
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def run_backfill(ticker_info: dict) -> dict:
         """
         Download OHLCV prices from BACKFILL_START to today for new tickers only,

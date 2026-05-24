@@ -76,7 +76,11 @@ EXPECTED_MACRO_SERIES     = 100   # we have ~108 configured
 MACRO_RAW_MART_RATIO      = 0.35  # dbt staging filters/deduplicates -- mart ~35-50% of raw is normal
 PRICE_EARLIEST_EXPECTED   = date(2010, 1, 1)
 MAX_PRICE_GAP_DAYS        = 5     # more than 5 calendar days without new prices = alert
-MAX_MACRO_STALE_DAYS      = 45    # series not updated in 45+ days = alert
+# Frequency-aware staleness thresholds (warn / error in calendar days).
+# Keyed on FRED frequency_short values from FRED_SERIES_CATALOG.
+# 'U' = unknown frequency (catalog not joined or series missing from catalog).
+MACRO_STALE_WARN = {'D': 2,   'W': 10,  'M': 35,  'Q': 100, 'A': 400, 'U': 45}
+MACRO_STALE_ERROR= {'D': 3,   'W': 17,  'M': 65,  'Q': 200, 'A': 760, 'U': 90}
 MIN_FUNDAMENTAL_TICKERS   = 250   # yfinance returns empty for most S&P 400/600 small-caps under load;
                                   # ~270 tickers is realistic. Raise when batch-pause logic improves coverage.
 MIN_VALUATION_DAYS        = 1     # at least 1 valuation snapshot
@@ -235,25 +239,50 @@ def check_macro(verbose: bool = False):
         result(FAIL, f"RAW->MART propagation: only {ratio:.1%} -- run: dbt build --select fact_macro_readings --full-refresh")
         issues += 1
 
-    # Recency -- series with stale latest observation
-    df_stale = execute_sql(f"""
-        SELECT series_id, series_name,
-               MAX(observation_date) AS latest,
-               DATEDIFF('day', MAX(observation_date), CURRENT_DATE()) AS days_stale
-        FROM EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS
-        GROUP BY series_id, series_name
-        HAVING days_stale > {MAX_MACRO_STALE_DAYS}
+    # Recency -- frequency-aware staleness check joined to FRED_SERIES_CATALOG
+    df_stale = execute_sql("""
+        SELECT
+            m.series_id,
+            m.series_name,
+            MAX(m.observation_date)                                           AS latest,
+            DATEDIFF('day', MAX(m.observation_date), CURRENT_DATE())          AS days_stale,
+            COALESCE(UPPER(c.frequency_short), 'U')                           AS freq
+        FROM EQUITY_ANALYTICS.MARTS.FACT_MACRO_READINGS m
+        LEFT JOIN EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG c
+               ON m.series_id = c.series_id
+        GROUP BY m.series_id, m.series_name, c.frequency_short
         ORDER BY days_stale DESC
     """)
-    if df_stale.empty:
-        result(PASS, f"All series updated within {MAX_MACRO_STALE_DAYS} days")
-    else:
-        # Many FRED series are low-frequency (quarterly GDP etc.) -- only flag daily series
-        result(WARN, f"{len(df_stale)} series last updated >{MAX_MACRO_STALE_DAYS} days ago (may be low-frequency, not errors)")
+
+    stale_error, stale_warn = [], []
+    for _, r in df_stale.iterrows():
+        freq       = str(r['freq']) if r['freq'] else 'U'
+        days_stale = int(r['days_stale'])
+        warn_thr   = MACRO_STALE_WARN.get(freq,  MACRO_STALE_WARN['U'])
+        error_thr  = MACRO_STALE_ERROR.get(freq, MACRO_STALE_ERROR['U'])
+        if days_stale > error_thr:
+            stale_error.append(r)
+        elif days_stale > warn_thr:
+            stale_warn.append(r)
+
+    if not stale_error and not stale_warn:
+        result(PASS, "All series within staleness thresholds for their update frequency")
+    if stale_warn:
+        result(WARN, f"{len(stale_warn)} series overdue vs frequency-adjusted warn threshold")
         if verbose:
-            print(f"\n  {'Series ID':<25} {'Latest':<15} {'Days stale':>10}")
-            for _, r in df_stale.head(15).iterrows():
-                print(f"  {r['series_id']:<25} {str(r['latest']):<15} {int(r['days_stale']):>10}")
+            print(f"\n  {'Series ID':<25} {'Freq':<6} {'Latest':<13} {'Days':>6} {'Warn@':>6}")
+            for r in stale_warn[:15]:
+                freq = str(r['freq'])
+                print(f"  {r['series_id']:<25} {freq:<6} {str(r['latest']):<13} "
+                      f"{int(r['days_stale']):>6} {MACRO_STALE_WARN.get(freq, MACRO_STALE_WARN['U']):>6}")
+    if stale_error:
+        result(FAIL, f"{len(stale_error)} series overdue vs frequency-adjusted error threshold")
+        issues += 1
+        print(f"\n  {'Series ID':<25} {'Freq':<6} {'Latest':<13} {'Days':>6} {'Error@':>6}")
+        for r in stale_error[:15]:
+            freq = str(r['freq'])
+            print(f"  {r['series_id']:<25} {freq:<6} {str(r['latest']):<13} "
+                  f"{int(r['days_stale']):>6} {MACRO_STALE_ERROR.get(freq, MACRO_STALE_ERROR['U']):>6}")
 
     # Coverage range
     df_range = execute_sql("""

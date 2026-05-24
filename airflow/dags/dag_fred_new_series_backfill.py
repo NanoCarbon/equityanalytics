@@ -48,7 +48,7 @@ DEFAULT_ARGS = {
 )
 def fred_new_series_backfill():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def identify_new_series() -> list[dict]:
         """
         Returns the list of series that are active in FRED_SELECTION but have
@@ -91,7 +91,7 @@ def fred_new_series_backfill():
 
         return new_series
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def backfill_new_series(new_series: list[dict]) -> int:
         """
         Fetches full history for each new series and appends to

@@ -50,7 +50,7 @@ DEFAULT_ARGS = {
 )
 def ticker_universe_sync():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def sync_sp_indices() -> dict:
         """
         Scrape current S&P 1500 + ETF list and reconcile ONLY those source rows
@@ -218,7 +218,7 @@ def ticker_universe_sync():
         )
         return result
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def sync_nasdaq_trader(sp_result: dict) -> dict:
         """
         Download the NASDAQ Trader flat files and reconcile against

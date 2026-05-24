@@ -27,7 +27,7 @@ from typing import List, Dict
 
 logger = logging.getLogger(__name__)
 
-HTTP_TIMEOUT = 30
+HTTP_TIMEOUT = 60  # NASDAQ flat files can be >5MB; 60s prevents timeout on slow connections
 _HEADERS = {
     'User-Agent': (
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
@@ -181,13 +181,16 @@ def fetch_nasdaq_trader_us() -> List[Dict]:
                 continue
             if '$' in sym or '^' in sym:
                 continue
+            # Financial Status filter: default to 'N' (Normal) if column absent from
+            # this file's schema — safe fallback, no securities incorrectly excluded.
+            fin_status = str(row.get('Financial Status', 'N')).strip().upper()
+            if fin_status in _EXCLUDE_FINANCIAL_STATUS:
+                continue
 
             exchange_code = str(row.get('Exchange', 'N')).strip().upper()
             exchange      = _EXCHANGE_MAP.get(exchange_code, 'NYSE')
             is_etf        = str(row.get('ETF', 'N')).strip().upper() == 'Y'
             name          = str(row.get('Security Name', '')).strip()
-
-            # otherlisted.txt has no Financial Status column — skip that filter
 
             results.append(_make_row(
                 ticker=sym,

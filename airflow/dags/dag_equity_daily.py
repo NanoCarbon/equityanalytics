@@ -43,7 +43,7 @@ DEFAULT_ARGS = {
 )
 def equity_daily():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
         """
         Load active tickers from RAW.TICKER_UNIVERSE (primary source).
@@ -59,7 +59,7 @@ def equity_daily():
         logger.info("Loaded %d tickers", len(all_tickers))
         return all_tickers
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_max_date() -> str | None:
         """
         Find the most recent date already in RAW.PRICES.
@@ -77,7 +77,7 @@ def equity_daily():
         logger.info("No existing data — full historical load")
         return None
 
-    @task(retries=3, retry_delay=timedelta(minutes=2))
+    @task(retries=3, retry_delay=timedelta(minutes=2), execution_timeout=timedelta(hours=2))
     def extract_and_load_prices(tickers: list, max_date: str | None) -> int:
         """
         Extract new OHLCV prices from yfinance and append to RAW.PRICES.
@@ -99,7 +99,7 @@ def equity_daily():
         logger.info("Appended %d rows to RAW.PRICES", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=2))
+    @task(retries=2, retry_delay=timedelta(minutes=2), execution_timeout=timedelta(hours=2))
     def extract_and_load_company_info(tickers: list) -> int:
         """
         Extract company metadata (sector, market cap, etc.) and overwrite

@@ -42,7 +42,7 @@ DEFAULT_ARGS = {
 )
 def macro_daily():
 
-    @task(retries=3, retry_delay=timedelta(minutes=1))
+    @task(retries=3, retry_delay=timedelta(minutes=1), execution_timeout=timedelta(hours=2))
     def extract_and_load_macro() -> int:
         """
         Incrementally fetch new FRED observations and append to RAW.MACRO_INDICATORS.

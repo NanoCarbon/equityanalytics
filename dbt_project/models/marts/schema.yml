@@ -103,3 +103,33 @@ models:
       - name: snapshot_date
         tests:
           - not_null
+      - name: trailing_pe
+        description: "Trailing 12-month price-to-earnings ratio."
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "trailing_pe <= 1000 or trailing_pe is null"
+              severity: warn
+      - name: forward_pe
+        description: "Forward price-to-earnings ratio based on analyst estimates."
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "forward_pe <= 1000 or forward_pe is null"
+              severity: warn
+      - name: gross_margin
+        description: "Gross margin stored as decimal (0.45 = 45%). Values >1 or <-1 indicate extraction errors."
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "(gross_margin between -1.0 and 1.0) or gross_margin is null"
+              severity: warn
+      - name: operating_margin
+        description: "Operating margin stored as decimal."
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "(operating_margin between -1.0 and 1.0) or operating_margin is null"
+              severity: warn
+      - name: profit_margin
+        description: "Net profit margin stored as decimal."
+        tests:
+          - dbt_utils.expression_is_true:
+              expression: "(profit_margin between -1.0 and 1.0) or profit_margin is null"
+              severity: warn

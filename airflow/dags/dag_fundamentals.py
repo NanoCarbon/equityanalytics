@@ -43,7 +43,7 @@ DEFAULT_ARGS = {
 )
 def fundamentals_weekly():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_equity_tickers() -> list:
         """
         Load equity-only tickers from RAW.TICKER_UNIVERSE (is_equity=TRUE).
@@ -60,7 +60,7 @@ def fundamentals_weekly():
         logger.info("Loaded %d equity tickers", len(equity_tickers))
         return equity_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_statements(equity_tickers: list) -> int:
         """
         Extract income statement, balance sheet, and cash flow data
@@ -105,7 +105,7 @@ def fundamentals_weekly():
 )
 def valuation_daily():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_all_tickers() -> list:
         """
         Load all active tickers from RAW.TICKER_UNIVERSE (equities + ETFs).
@@ -122,7 +122,7 @@ def valuation_daily():
         logger.info("Loaded %d tickers", len(all_tickers))
         return all_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_valuations(tickers: list) -> int:
         """
         Extract point-in-time valuation metrics (PE ratio, P/B, EV/EBITDA,
