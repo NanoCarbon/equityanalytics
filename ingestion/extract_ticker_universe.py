@@ -229,29 +229,305 @@ def fetch_nasdaq_trader_us() -> List[Dict]:
     return deduped
 
 
-# ── International indices (Phase 3 — stubs) ───────────────────────────────────
-# These will be implemented in Phase 3. Stubs are here so import works cleanly.
+# ── International indices (Phase 3) ──────────────────────────────────────────
+# All five functions scrape Wikipedia constituent tables using the same
+# requests + pd.read_html pattern.  Each returns a list of normalised row
+# dicts ready for MERGE into RAW.TICKER_UNIVERSE.
+
+_WIKI_HEADERS = {
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/124.0.0.0 Safari/537.36'
+    )
+}
+
+
+def _fetch_wikipedia_table(
+    url: str,
+    index_name: str,
+    ticker_candidates: list[str],
+) -> pd.DataFrame:
+    """
+    Download a page and return the first table that contains one of the
+    ticker_candidates column names.
+
+    Wikipedia pages often have multiple tables (info boxes, historical data,
+    navigation boxes) before the constituent list.  Scanning by column name
+    rather than hardcoding a table index makes the function robust to page
+    layout changes.
+
+    Raises RuntimeError on HTTP error, ValueError if no matching table is found.
+    """
+    response = requests.get(url, headers=_WIKI_HEADERS, timeout=HTTP_TIMEOUT)
+    if not response.ok:
+        raise RuntimeError(
+            f"HTTP {response.status_code} fetching {index_name} page"
+        )
+    tables = pd.read_html(StringIO(response.text))
+    if not tables:
+        raise ValueError(f"No tables found on {index_name} page")
+
+    for i, df in enumerate(tables):
+        for col in ticker_candidates:
+            if col in df.columns:
+                logger.debug(
+                    "%s: found ticker column '%s' in table %d (of %d)",
+                    index_name, col, i, len(tables),
+                )
+                return df
+
+    raise ValueError(
+        f"No table on {index_name} page contained a ticker column. "
+        f"Tried: {ticker_candidates}. "
+        f"Tables found: {[list(t.columns)[:4] for t in tables]}"
+    )
+
+
+def _fetch_url_tables(url: str, index_name: str) -> list[pd.DataFrame]:
+    """
+    Download a page and return all parsed tables.  Used for sources (e.g. JPX)
+    where the constituent data is spread across multiple tables.
+    """
+    response = requests.get(url, headers=_WIKI_HEADERS, timeout=HTTP_TIMEOUT)
+    if not response.ok:
+        raise RuntimeError(
+            f"HTTP {response.status_code} fetching {index_name} page"
+        )
+    tables = pd.read_html(StringIO(response.text))
+    if not tables:
+        raise ValueError(f"No tables found on {index_name} page")
+    logger.debug("%s: found %d table(s)", index_name, len(tables))
+    return tables
+
+
+def _pick_column(df: pd.DataFrame, candidates: list[str], index_name: str) -> str:
+    """Return the first candidate column name that exists in df.columns."""
+    for col in candidates:
+        if col in df.columns:
+            return col
+    raise ValueError(
+        f"Could not find column in {index_name} table. "
+        f"Tried: {candidates}. Available: {df.columns.tolist()}"
+    )
+
 
 def fetch_ftse100() -> List[Dict]:
-    """FTSE 100 constituents from Wikipedia. Suffix: .L  (Phase 3)"""
-    raise NotImplementedError("Phase 3: FTSE 100 not yet implemented")
+    """
+    FTSE 100 constituents from Wikipedia.
+
+    URL: https://en.wikipedia.org/wiki/FTSE_100_Index
+    Ticker column: 'Ticker' (current as of 2026) — page layout has changed from
+                   'EPIC' in the past; '_fetch_wikipedia_table' scans for either.
+    yfinance suffix: .L
+    Exchange: LSE
+    Country: GB
+    """
+    _TICKER_CANDIDATES = ['Ticker', 'EPIC', 'Symbol']
+    _NAME_CANDIDATES   = ['Company', 'Name', 'Security']
+
+    url = 'https://en.wikipedia.org/wiki/FTSE_100_Index'
+    df  = _fetch_wikipedia_table(url, 'FTSE 100', _TICKER_CANDIDATES)
+
+    ticker_col = _pick_column(df, _TICKER_CANDIDATES, 'FTSE 100')
+    name_col   = _pick_column(df, _NAME_CANDIDATES,   'FTSE 100')
+
+    results: List[Dict] = []
+    for _, row in df.iterrows():
+        sym = str(row[ticker_col]).strip()
+        if not sym or sym == ticker_col:
+            continue
+        name = str(row.get(name_col, '')).strip()
+        results.append(_make_row(
+            ticker=f'{sym}.L',
+            name=name,
+            exchange='LSE',
+            country='GB',
+            is_equity=True,
+            source='ftse100',
+            yfinance_suffix='.L',
+        ))
+
+    logger.info("fetch_ftse100: %d constituents", len(results))
+    return results
 
 
 def fetch_tsx60() -> List[Dict]:
-    """S&P/TSX 60 constituents from Wikipedia. Suffix: .TO  (Phase 3)"""
-    raise NotImplementedError("Phase 3: TSX 60 not yet implemented")
+    """
+    S&P/TSX 60 constituents from Wikipedia.
+
+    URL: https://en.wikipedia.org/wiki/S%26P/TSX_60
+    Ticker column: 'Symbol' (current layout; was 'Ticker symbol' historically)
+    yfinance suffix: .TO
+    Exchange: TSX
+    Country: CA
+    """
+    _TICKER_CANDIDATES = ['Symbol', 'Ticker symbol', 'Ticker']
+    _NAME_CANDIDATES   = ['Company', 'Name', 'Security']
+
+    url = 'https://en.wikipedia.org/wiki/S%26P/TSX_60'
+    df  = _fetch_wikipedia_table(url, 'TSX 60', _TICKER_CANDIDATES)
+
+    ticker_col = _pick_column(df, _TICKER_CANDIDATES, 'TSX 60')
+    name_col   = _pick_column(df, _NAME_CANDIDATES,   'TSX 60')
+
+    results: List[Dict] = []
+    for _, row in df.iterrows():
+        sym = str(row[ticker_col]).strip()
+        if not sym or sym == ticker_col:
+            continue
+        name = str(row.get(name_col, '')).strip()
+        results.append(_make_row(
+            ticker=f'{sym}.TO',
+            name=name,
+            exchange='TSX',
+            country='CA',
+            is_equity=True,
+            source='tsx60',
+            yfinance_suffix='.TO',
+        ))
+
+    logger.info("fetch_tsx60: %d constituents", len(results))
+    return results
 
 
 def fetch_asx200() -> List[Dict]:
-    """S&P/ASX 200 constituents from Wikipedia. Suffix: .AX  (Phase 3)"""
-    raise NotImplementedError("Phase 3: ASX 200 not yet implemented")
+    """
+    S&P/ASX 200 constituents from Wikipedia.
+
+    URL: https://en.wikipedia.org/wiki/S%26P/ASX_200
+    Ticker column: 'Code'
+    yfinance suffix: .AX
+    Exchange: ASX
+    Country: AU
+    """
+    _TICKER_CANDIDATES = ['Code', 'Ticker', 'Symbol']
+    _NAME_CANDIDATES   = ['Company', 'Name', 'Security']
+
+    url = 'https://en.wikipedia.org/wiki/S%26P/ASX_200'
+    df  = _fetch_wikipedia_table(url, 'ASX 200', _TICKER_CANDIDATES)
+
+    ticker_col = _pick_column(df, _TICKER_CANDIDATES, 'ASX 200')
+    name_col   = _pick_column(df, _NAME_CANDIDATES,   'ASX 200')
+
+    results: List[Dict] = []
+    for _, row in df.iterrows():
+        sym = str(row[ticker_col]).strip()
+        if not sym or sym == ticker_col:
+            continue
+        name = str(row.get(name_col, '')).strip()
+        results.append(_make_row(
+            ticker=f'{sym}.AX',
+            name=name,
+            exchange='ASX',
+            country='AU',
+            is_equity=True,
+            source='asx200',
+            yfinance_suffix='.AX',
+        ))
+
+    logger.info("fetch_asx200: %d constituents", len(results))
+    return results
+
+
+# Nikkei 225 official constituent source
+# Wikipedia's Nikkei 225 page does not have a structured constituent table with
+# TSE codes.  The Nikkei official index page (Nikkei Indexes) does, and it is
+# publicly accessible without authentication or API keys.
+_JPX_NIKKEI225_URL = 'https://indexes.nikkei.co.jp/en/nkave/index/component?idx=nk225'
 
 
 def fetch_nikkei225() -> List[Dict]:
-    """Nikkei 225 constituents from Wikipedia. Suffix: .T  (Phase 3)"""
-    raise NotImplementedError("Phase 3: Nikkei 225 not yet implemented")
+    """
+    Nikkei 225 constituents from the official Nikkei Indexes page.
+
+    Source: https://indexes.nikkei.co.jp/en/nkave/index/component?idx=nk225
+    The page renders multiple tables (one per industry sector) each with
+    columns 'Code' (TSE ticker code) and 'Company Name'.
+
+    yfinance format: '{code}.T'  (e.g. '7203.T' for Toyota)
+    Codes may be 4-digit numeric (legacy) or alphanumeric (e.g. '285A' for
+    KIOXIA) — both are valid TSE codes supported by yfinance.
+    Exchange: TSE (Tokyo Stock Exchange)
+    Country: JP
+    """
+    all_tables = _fetch_url_tables(_JPX_NIKKEI225_URL, 'Nikkei 225')
+
+    results: List[Dict] = []
+    seen: set = set()
+    for df in all_tables:
+        if 'Code' not in df.columns or 'Company Name' not in df.columns:
+            continue
+        for _, row in df.iterrows():
+            raw_code = str(row['Code']).strip()
+            if not raw_code or raw_code == 'Code':
+                continue
+            # Strip any trailing '.0' that pandas adds when reading int-like floats
+            code = raw_code.split('.')[0].strip() if raw_code.replace('.', '').isdigit() else raw_code
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            name = str(row.get('Company Name', '')).strip()
+            results.append(_make_row(
+                ticker=f'{code}.T',
+                name=name,
+                exchange='TSE',
+                country='JP',
+                is_equity=True,
+                source='nikkei225',
+                yfinance_suffix='.T',
+            ))
+
+    logger.info("fetch_nikkei225: %d constituents", len(results))
+    return results
 
 
 def fetch_dax40() -> List[Dict]:
-    """DAX 40 constituents from Wikipedia. Suffix: .DE  (Phase 3)"""
-    raise NotImplementedError("Phase 3: DAX 40 not yet implemented")
+    """
+    DAX 40 constituents from Wikipedia.
+
+    URL: https://en.wikipedia.org/wiki/DAX
+    Ticker column: 'Ticker' — Wikipedia already provides the full yfinance-ready
+    symbol for each constituent.  Most are XETRA-listed (suffix .DE) but a small
+    number trade on other exchanges, e.g. Airbus (AIR.PA on Euronext Paris).
+    The ticker is stored as-is; yfinance_suffix reflects the actual suffix.
+
+    Exchange: FWB (Frankfurt Stock Exchange / XETRA) for DE-listed constituents.
+    Country: DE  (country of DAX membership, not necessarily primary listing).
+    """
+    _TICKER_CANDIDATES = ['Ticker', 'Symbol']
+    _NAME_CANDIDATES   = ['Company', 'Name', 'Security']
+
+    url = 'https://en.wikipedia.org/wiki/DAX'
+    df  = _fetch_wikipedia_table(url, 'DAX 40', _TICKER_CANDIDATES)
+
+    ticker_col = _pick_column(df, _TICKER_CANDIDATES, 'DAX 40')
+    name_col   = _pick_column(df, _NAME_CANDIDATES,   'DAX 40')
+
+    results: List[Dict] = []
+    for _, row in df.iterrows():
+        sym = str(row[ticker_col]).strip()
+        if not sym or sym == ticker_col:
+            continue
+        # Wikipedia provides the correct yfinance ticker including exchange suffix.
+        # Extract the suffix (e.g. '.DE', '.PA') for the yfinance_suffix field.
+        if '.' in sym:
+            suffix = '.' + sym.rsplit('.', 1)[1]
+            ticker = sym
+        else:
+            # Rare fallback: symbol without suffix → assume XETRA
+            suffix = '.DE'
+            ticker = f'{sym}.DE'
+        name = str(row.get(name_col, '')).strip()
+        results.append(_make_row(
+            ticker=ticker,
+            name=name,
+            exchange='FWB',
+            country='DE',
+            is_equity=True,
+            source='dax40',
+            yfinance_suffix=suffix,
+        ))
+
+    logger.info("fetch_dax40: %d constituents", len(results))
+    return results
