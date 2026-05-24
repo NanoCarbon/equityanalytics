@@ -3,7 +3,7 @@ import logging
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-from db.snowflake import execute_sql_cached
+from db.snowflake import execute_sql_params
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +47,15 @@ def render_event_study():
             for d in FWD_DAYS
         )
 
+        # ticker is bound via %s — never interpolated into the SQL string.
+        # where_clause values come from st.number_input (float) and hardcoded
+        # condition strings, so f-string interpolation is safe for those.
         event_sql = f"""
         WITH events AS (
             SELECT ticker, price_date AS event_date,
                    daily_return AS event_return, close_price AS event_close
             FROM EQUITY_ANALYTICS.MARTS.FACT_DAILY_PRICES
-            WHERE ticker = '{ticker}' AND {where_clause}
+            WHERE ticker = %s AND {where_clause}
         ),
         forward_returns AS (
             SELECT e.event_date, e.event_return,
@@ -76,7 +79,7 @@ def render_event_study():
 
         with st.spinner(f"Scanning history for {ticker}\u2026"):
             try:
-                df = execute_sql_cached(event_sql)
+                df = execute_sql_params(event_sql, (ticker,))
                 if df.empty:
                     st.warning(f"No events found for {ticker} \u00b7 {condition} \u00b7 {threshold}%")
                     return

@@ -441,7 +441,15 @@ def extract_fred_series(
             logger.warning("Skipping %s — premium series, free key not authorized (403)", series_id)
             return pd.DataFrame()
 
-        response.raise_for_status()
+        # Catch HTTPError explicitly so the full requests exception (which
+        # includes the request URL — and therefore the api_key query param)
+        # is never written to logs.
+        if not response.ok:
+            logger.warning(
+                "FRED unexpected HTTP %d for %s — skipping",
+                response.status_code, series_id,
+            )
+            return None
 
         observations = response.json().get("observations", [])
         if not observations:
