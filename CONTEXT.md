@@ -22,8 +22,12 @@
 EQUITY_ANALYTICS
 ├── RAW
 │   ├── TICKER_UNIVERSE (table) — canonical ticker list; FK referenced by all 8 RAW ticker tables
-│   │     columns: ticker (PK), source (sp500/sp400/sp600/etf/manual), is_active, is_equity,
+│   │     columns: ticker (PK), source (sp500/sp400/sp600/etf/nasdaq_trader/manual/ftse100/tsx60/asx200/nikkei225/dax40),
+│   │              is_active, is_equity, exchange (NASDAQ/NYSE/NYSE_ARCA/NYSE_AMEX/BATS/IEX/NULL),
+│   │              country (ISO-2, 'US' for all domestic), yfinance_suffix ('' for US, '.L'/'.TO'/etc for intl),
+│   │              fundamentals_cohort (0-3 for equities, NULL for ETFs; ABS(HASH(ticker))%4),
 │   │              added_at, deactivated_at, deactivation_reason
+│   │     Source priority (MERGE rule): sp500 > sp400 > sp600 > etf > nasdaq_trader — S&P/ETF source never overwritten
 │   ├── PRICES (table) — ~1,600 tickers, daily OHLCV, incremental append
 │   ├── COMPANY_INFO (table) — ~1,600 tickers, metadata, overwrite on each run
 │   ├── MACRO_INDICATORS (table) — 788+ FRED series, incremental append
@@ -55,12 +59,17 @@ EQUITY_ANALYTICS
 ```
 
 ## Data coverage
-- ~1,619 tickers — full S&P Composite 1500 (S&P 500 + S&P 400 mid-cap + S&P 600 small-cap) + ETFs
-  - **Ticker universe architecture (May 2026):** `RAW.TICKER_UNIVERSE` is now the canonical source, mirroring `RAW.FRED_SELECTION`. All yfinance DAGs call `get_tickers_from_db(conn)` at runtime; falls back to Wikipedia scrape on DB error.
-  - `ticker_universe_sync` DAG (3am ET Mon-Fri) syncs Wikipedia → TICKER_UNIVERSE: inserts new tickers, soft-deactivates removals (FK refs preserved), reactivates returning tickers
-  - FK constraints from all 8 RAW ticker tables (PRICES, COMPANY_INFO, FINANCIAL_STATEMENTS, VALUATION_METRICS, DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) → TICKER_UNIVERSE.ticker
+- **~11,899 tickers** — full S&P Composite 1500 + all US exchange-listed securities via NASDAQ Trader flat files
+  - **Ticker universe architecture (May 2026):** `RAW.TICKER_UNIVERSE` is the canonical source, mirroring `RAW.FRED_SELECTION`. All yfinance DAGs call `get_tickers_from_db(conn)` at runtime; falls back to Wikipedia scrape on DB error.
+  - `ticker_universe_sync` DAG (3am ET Mon-Fri) runs two chained tasks:
+    - `sync_sp_indices()`: Wikipedia → TICKER_UNIVERSE MERGE for S&P 500/400/600 + ETF list; deactivation scoped to sp500/sp400/sp600/etf sources only
+    - `sync_nasdaq_trader()`: downloads `nasdaqlisted.txt` + `otherlisted.txt`; inserts new tickers, reactivates returning tickers, deactivates delisted tickers; backfills `exchange` for existing S&P tickers
+  - Source priority MERGE rule: S&P/ETF source is never overwritten by nasdaq_trader; exchange/country/yfinance_suffix always refreshed from incoming data
+  - FK constraints from all 8 RAW ticker tables → TICKER_UNIVERSE.ticker
   - Static fallback lists in extract.py used only when DB is unreachable
-  - Universe: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~113, total 1,619 unique
+  - Universe breakdown: S&P 500 ~503, S&P 400 ~400, S&P 600 ~603, ETFs ~113, NASDAQ Trader ~10,280; total 11,899 unique
+  - Equity/ETF split: 6,668 equities (fundamentals eligible) / 5,231 ETFs
+  - Cohort distribution: cohort 0=1,692, 1=1,574, 2=1,672, 3=1,730
 - **6,100 active FRED macro series** (catalog-driven, all 4 popularity-tier batches complete)
   - **Architecture change (May 2026):** `FRED_SERIES` Python dict is now a local fallback name map only. `RAW.FRED_SELECTION` is the canonical source of which series to extract — survives monthly catalog overwrites.
   - `get_selected_fred_series(conn)` in `extract_fred.py` reads from `FRED_SELECTION`; all three extraction DAGs use it at runtime
@@ -97,7 +106,7 @@ when the operator can monitor them locally.
 
 | DAG | Schedule | Cron | File | Description |
 |---|---|---|---|---|
-| `ticker_universe_sync` | 3am ET Mon-Fri | `0 8 * * 2-6` | dag_ticker_universe_sync.py | Sync RAW.TICKER_UNIVERSE from Wikipedia S&P 1500 scrape; runs 1hr before equity_daily |
+| `ticker_universe_sync` | 3am ET Mon-Fri | `0 8 * * 2-6` | dag_ticker_universe_sync.py | Two tasks: sync_sp_indices (Wikipedia S&P 1500 MERGE) then sync_nasdaq_trader (NASDAQ Trader flat files MERGE); runs 1hr before equity_daily |
 | `equity_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_equity_daily.py | Prices + company info (reads TICKER_UNIVERSE, incremental) |
 | `macro_daily` | 11pm ET Mon-Fri | `0 4 * * 2-6` | dag_macro_daily.py | 788+ FRED macro series (reads FRED_SELECTION at runtime, incremental append, auto-picks up new series) |
 | `fundamentals_weekly` | 11pm ET Saturday | `0 4 * * 0` | dag_fundamentals.py | Financial statements (full overwrite) |
@@ -230,6 +239,7 @@ docker compose exec airflow-webserver airflow tasks states-for-dag-run <dag_id> 
 - **QUALIFY dedup** added to stg_prices and stg_macro_indicators to clean RAW append-only overlap at staging layer. This requires `--full-refresh` on fact_daily_prices and fact_macro_readings if pre-existing duplicates are present.
 - **test-paths** corrected in dbt_project.yml: `["dbt_project/tests"]` (was pointing to non-existent repo-root `tests/` directory — all 15 singular tests were dead code until this fix)
 - Clean build (May 2026): PASS=108, WARN=1 (assert_return_bounds ±200% threshold, investigative signal only), ERROR=0
+- `stg_ticker_universe` build: PASS=7, WARN=0, ERROR=0 (verified against 11,899-ticker dataset)
 - New staging models (all views): stg_ticker_universe, stg_dividends_and_splits, stg_earnings_history, stg_analyst_recommendations, stg_analyst_price_targets, stg_fred_selection, stg_fred_releases, stg_fred_series_catalog
 - Snowflake reserved keyword pitfalls in staging: `"CURRENT"` (stg_analyst_price_targets), `"INDEX"` (stg_analyst_recommendations)
 
@@ -313,10 +323,11 @@ dbt build --profiles-dir .
 - airflow/dags/dag_macro_backfill.py — macro_backfill DAG (manual, full FRED history — paused by default)
 - airflow/dags/dag_fred_new_series_backfill.py — fred_new_series_backfill DAG (manual, new series only, append-safe)
 - airflow/dags/dag_ticker_universe_sync.py — ticker_universe_sync DAG (3am ET Mon-Fri; Wikipedia → RAW.TICKER_UNIVERSE MERGE)
-- ingestion/seed_ticker_universe.py — one-shot seeder for TICKER_UNIVERSE (MERGE-safe, re-runnable)
+- ingestion/extract_ticker_universe.py — ticker universe extraction: fetch_nasdaq_trader_us() downloads both NASDAQ Trader flat files, filters bankrupt/test/warrant symbols, deduplicates on ticker; Phase 3 stubs for fetch_ftse100/tsx60/asx200/nikkei225/dax40
+- ingestion/seed_ticker_universe.py — one-shot seeder: seed_sp_and_etf(), seed_nasdaq_trader(), assign_fundamentals_cohort(); uses _merge_rows() with source-priority MERGE (S&P/ETF always wins); safe to re-run
 - scripts/db_health_check.py — reusable DB health check (run anytime, exits 0=pass/1=fail)
 - scripts/create_fred_hygiene_view.py — one-shot DDL runner for VW_FRED_HYGIENE in RAW schema
-  - Thresholds: EXPECTED_TICKERS=1500, MIN_TICKERS_PER_DAY=1400, MIN_FUNDAMENTAL_TICKERS=1200
+  - Thresholds: EXPECTED_TICKERS=1500 (pre-expansion baseline; update to ~11000 after price backfill completes), MIN_TICKERS_PER_DAY=1400, MIN_FUNDAMENTAL_TICKERS=1200
   - MACRO_RAW_MART_RATIO=0.35 (dbt staging deduplicates/filters, ~41% propagation is correct)
   - All print statements use pure ASCII (Windows cp1252 compatibility)
 - app/db/snowflake.py — Snowflake connection + query helpers for Streamlit app
@@ -393,23 +404,27 @@ Validate each batch: count rows in MACRO_INDICATORS by new series_ids, then `dbt
 
 ## Known issues / pending work (priority order)
 
-1. **GitHub branch protection** — Add rule on `main`: require PRs, require status checks, include administrators
-2. **Update chart_agent.py system prompt** — Add supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) to the Claude system prompt for SQL generation
-3. **FRED catalog retry hardening** — single 15s sleep + one retry insufficient for sustained 429 bursts; needs exponential backoff. Workaround: never run `fred_catalog_refresh` and `macro_backfill` simultaneously
-4. **Historical valuation ratios dbt model** — compute trailing PE/P/B/P/S/yield/beta from `fact_daily_prices` × `fact_fundamentals` join using point-in-time statement dates (avoids look-ahead bias)
-5. **dbt models for supplemental tables** — staging + mart models for DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS
-6. **Open PR: `fred-series-expansion`** — branch is 3 commits ahead of main, pushed to remote; PR not yet created
+1. **Phase 3 — International indices** — implement fetch_ftse100/tsx60/asx200/nikkei225/dax40 in extract_ticker_universe.py (stubs exist); add ~625 tickers with yfinance suffixes; Monday-only sync in ticker_universe_sync
+2. **Phase 4 — Price backfill at scale** — trigger backfill_new_tickers for ~10,280 new NASDAQ Trader tickers; tune equity_daily batch_size 50→100, delay 30s→10s; split into parallel US + international tasks
+3. **Phase 5 — Fundamentals cohort rotation** — update fundamentals_weekly to use WEEKOFYEAR(CURRENT_DATE())%4 filter; change load to per-cohort scoped DELETE+INSERT; run fact_fundamentals full-refresh after first 4-week cycle
+4. **GitHub branch protection** — Add rule on `main`: require PRs, require status checks, include administrators
+5. **Update chart_agent.py system prompt** — Add supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) to the Claude system prompt for SQL generation
+6. **FRED catalog retry hardening** — single 15s sleep + one retry insufficient for sustained 429 bursts; needs exponential backoff. Workaround: never run `fred_catalog_refresh` and `macro_backfill` simultaneously
+7. **Historical valuation ratios dbt model** — compute trailing PE/P/B/P/S/yield/beta from `fact_daily_prices` × `fact_fundamentals` join using point-in-time statement dates (avoids look-ahead bias)
+8. **dbt models for supplemental tables** — staging + mart models for DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS
+9. **db_health_check.py thresholds** — EXPECTED_TICKERS=1500 is stale; update to ~11000 after price backfill completes
 
 ## Backfill status (as of May 2026)
-- **Price backfill:** COMPLETE — RAW.PRICES has ~9.2M rows, 2010–present, ~1,619 tickers
-- **FRED macro backfill:** Batches 1 and 2 complete — 788 active series, 1,295,017 RAW rows, 563,975 mart rows; Batches 3–4 queued
-- **Fundamentals:** COMPLETE — equity_daily completed for all ~1,619 tickers
-- **FRED catalog:** RAW.FRED_SERIES_CATALOG has ~800K rows; FRED_SELECTION has 788 active entries (197 curated + 93 Batch 1 + 498 Batch 2)
+- **Price backfill (S&P 1500 + ETFs):** COMPLETE — RAW.PRICES has ~9.2M rows, 2010–present, ~1,619 tickers
+- **Price backfill (NASDAQ Trader ~10,280 new tickers):** PENDING — trigger backfill_new_tickers DAG
+- **FRED macro backfill:** ALL 4 BATCHES COMPLETE — 6,100 active series, 4,100,030 RAW rows; fact_macro_readings: 1,836,249 rows, 6,032 series
+- **Fundamentals (S&P 1500):** COMPLETE for original ~1,619 tickers; cohort rotation will extend coverage to all ~6,668 equities over 4 weeks
+- **FRED catalog:** RAW.FRED_SERIES_CATALOG has ~800K rows; FRED_SELECTION has 6,100 active entries
 
 ## Next steps
-1. Complete FRED catalog expansion: seed and trigger Batches 3–4; run `dbt build --select fact_macro_readings --full-refresh` after each
-2. Open PR: `fred-waves-4-6` → `fred-series-expansion` → `main`
-3. GitHub branch protection rules on `main`
-4. Update chart_agent.py system prompt with supplemental table schemas
-5. Historical valuation ratios dbt model (prices x fundamentals, avoids look-ahead bias)
-6. dbt models for supplemental tables (dividends, earnings, analyst)
+1. **Phase 3:** Implement international index fetch functions in extract_ticker_universe.py; seed + wire into sync DAG
+2. **Phase 4:** Trigger backfill_new_tickers for ~10,280 new tickers; tune equity_daily performance
+3. **Phase 5:** Update fundamentals_weekly for cohort rotation; run fact_fundamentals full-refresh after first 4-week cycle
+4. Open PR: `ticker-universe-expansion` → `main`
+5. GitHub branch protection rules on `main`
+6. Update chart_agent.py system prompt with supplemental table schemas
