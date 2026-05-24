@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 175 Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests the full S&P Composite 1500 universe plus top ETFs, 203 Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -36,7 +36,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 | Layer | Tool | Purpose |
 |---|---|---|
 | Ingestion | Python + yfinance | S&P 1500 + ETF prices, company metadata, financial statements, valuation metrics, dividends, earnings, analyst data |
-| Ingestion | Python + FRED API | 175 macro economic indicators + full FRED series catalog |
+| Ingestion | Python + FRED API | 203 FRED macro series (waves 1–6 complete) + full FRED series catalog |
 | Orchestration | Apache Airflow 2.9.3 (Docker Compose, local) | Scheduling, retries, observability |
 | Warehouse | Snowflake | Three-schema ELT architecture |
 | Transformation | dbt Core | Kimball dimensional modeling |
@@ -68,7 +68,7 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 - **Analyst price targets** — mean/high/low/count consensus snapshot appended weekly to build a time series
 
 ### Macro Indicators (FRED)
-175 series across 12 categories. Premium index series (SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225) excluded — require a paid FRED subscription:
+203 series across 15 categories. Premium index series (SP500, NASDAQCOM, DJIA, WILL5000PR, NIKKEI225) excluded — require a paid FRED subscription:
 - **Interest rates** (14) — DFF, FEDFUNDS, SOFR, DFEDTARU, DFEDTARL, full Treasury curve DGS1MO → DGS30
 - **Yield curve & spreads** (18) — T10Y2Y, T10Y3M, DFII2–DFII30 (TIPS), Treasury–Fed Funds spreads, Aaa/Baa–FF spreads, TEDRATE, HQM corporate bond spot rates
 - **Inflation** (20) — CPI headline/core, PCE headline/core, PPI, UMich inflation expectations, CPI sub-components (housing, energy, medical, transport, recreation, durables), Atlanta Fed sticky/flexible CPI, GDP deflator
@@ -81,6 +81,9 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 - **Trade & FX** (15) — exports, imports, export prices, broad USD index, 8 major currency pairs (EUR, JPY, GBP, CNY, CAD, BRL, KRW, INR, MXN), wholesale inventories and sales
 - **Energy & commodities** (12) — WTI, Brent, gasoline, natural gas, retail electricity, gold, copper, nickel, iron ore, wheat, corn, cotton
 - **Market indicators** (4) — VIX, NBER recession indicators (two variants), Empire State manufacturing survey
+- **Regional Fed manufacturing** (12) — Philly Fed (general activity, new orders, prices paid, employment, shipments), Richmond Fed (business conditions, employment), Dallas Fed (activity, production, employment), Kansas City Fed (activity, production)
+- **Government finance & fiscal** (8) — gross federal debt, debt/GDP, monthly Treasury surplus/deficit, federal receipts, expenditures, government net saving, outlays/GDP, revenue/GDP
+- **Banking profitability & deposits** (8) — net interest margin, ROE, ROA, consumer loan delinquency, total deposits, prime rate, large time deposits, bank equity/assets ratio
 
 ### FRED Series Catalog
 - **RAW.FRED_RELEASES** — one row per FRED statistical release (~300 rows), rebuilt monthly
@@ -142,7 +145,7 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
 - Appends to `RAW.PRICES`, overwrites `RAW.COMPANY_INFO`
 
 **`macro_daily`** — schedule `0 4 * * 2-6` (11pm ET Mon–Fri)
-- All 175 FRED series fetched automatically — adding series to `FRED_SERIES` in `extract_fred.py` is sufficient, no DAG changes needed
+- All 203 FRED series fetched automatically — adding series to `FRED_SERIES` in `extract_fred.py` is sufficient, no DAG changes needed
 - Incremental append: queries `MAX(date)` already loaded and fetches only newer observations (with a 7-day overlap to catch FRED revisions)
 - Falls back to 30-day lookback if the table is empty
 
@@ -633,7 +636,10 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 | Trade & FX | 15 | Exports/imports, export prices, DTWEXBGS, USD/EUR/JPY/GBP/CNY/CAD/BRL/KRW/INR/MXN |
 | Energy & commodities | 12 | WTI, Brent, natural gas, gold, copper, nickel, iron ore, wheat, corn, cotton |
 | Market indicators | 4 | VIXCLS, USREC, USRECM, Empire State manufacturing (GACDISA) |
-| **Total** | **175** | |
+| Regional Fed manufacturing *(Wave 4)* | 12 | Philly (PHFRBIND/NDI/P/E/SIP), Richmond (RMBSIICS/E), Dallas (DALLASMI/PE/EO), KC (KANSASMI/PE) |
+| Government finance & fiscal *(Wave 5)* | 8 | GFDEBTN, GFDEGDQ188S, MTSDS133FMS, MTSO133FMS, FGEXPND, GGSAVE, FYONGDA188S, HBFRGDP |
+| Banking profitability & deposits *(Wave 6)* | 8 | USNIM, USROE, USROA, DRCLACBS, WDTGAL, DPRIME, DTCTMFNM, EQTATOA |
+| **Total** | **203** | |
 
 ---
 
@@ -648,7 +654,7 @@ Index membership is fetched live from Wikipedia on each DAG run — rebalances a
 
 The goal is exhaustive coverage of the FRED catalog — systematic breadth over selective curation. Use `RAW.FRED_SERIES_CATALOG` to verify series IDs before adding each wave. Query against `RAW.MACRO_INDICATORS` to confirm gaps.
 
-**Wave 4 — Regional Federal Reserve Economic Surveys** (~15 series)
+**Wave 4 — Regional Federal Reserve Economic Surveys** ✅ COMPLETE (12 series)
 
 Five regional Fed banks publish monthly manufacturing and services surveys. We have Chicago (CFNAI, NFCI) and New York (Empire State). Missing:
 
@@ -671,7 +677,7 @@ Rationale: Regional surveys provide leading signals on manufacturing activity an
 
 ---
 
-**Wave 5 — Government Finance & Fiscal Policy** (~8 series)
+**Wave 5 — Government Finance & Fiscal Policy** ✅ COMPLETE (8 series)
 
 Currently zero federal fiscal coverage despite fiscal policy being a primary macro driver.
 
@@ -690,7 +696,7 @@ Rationale: Debt sustainability and fiscal impulse affect real rates, inflation, 
 
 ---
 
-**Wave 6 — Banking System Profitability & Deposit Data** (~8 series)
+**Wave 6 — Banking System Profitability & Deposit Data** ✅ COMPLETE (8 series)
 
 We have lending standards (SLOOS) and loan quality (delinquency rates) but not bank profitability or deposit flows.
 
