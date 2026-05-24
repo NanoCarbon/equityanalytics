@@ -67,10 +67,14 @@ def backfill_new_tickers():
           - already_loaded : count of tickers skipped
           - skip : True if nothing to do
         """
-        from ingestion.extract import get_all_tickers
-        from ingestion.load import get_loaded_tickers
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_loaded_tickers, get_connection
 
-        universe       = get_all_tickers()
+        conn     = get_connection()
+        try:
+            universe, _ = get_tickers_from_db(conn)
+        finally:
+            conn.close()
         already_loaded = get_loaded_tickers("PRICES")
         new_tickers    = [t for t in universe if t not in already_loaded]
 

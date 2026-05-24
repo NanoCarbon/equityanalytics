@@ -60,13 +60,20 @@ def macro_backfill():
         always reflect the latest published values.
         """
         import os
-        from ingestion.extract_fred import extract_all_fred_series
-        from ingestion.load import load_dataframe
+        from ingestion.extract_fred import extract_all_fred_series, get_selected_fred_series
+        from ingestion.load import load_dataframe, get_connection
 
         api_key = os.environ["FRED_API_KEY"]
 
-        logger.info("Starting full FRED history backfill from %s", FULL_HISTORY_START)
-        df = extract_all_fred_series(api_key, start_date=FULL_HISTORY_START)
+        # Load series selection from catalog (falls back to FRED_SERIES dict on error)
+        conn = get_connection()
+        try:
+            series_dict = get_selected_fred_series(conn)
+        finally:
+            conn.close()
+
+        logger.info("Starting full FRED history backfill from %s for %d series", FULL_HISTORY_START, len(series_dict))
+        df = extract_all_fred_series(api_key, start_date=FULL_HISTORY_START, series_dict=series_dict)
 
         if df is None or df.empty:
             logger.warning("No data returned from FRED — check API key and network")

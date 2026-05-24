@@ -6,7 +6,7 @@ profile: 'equity_analytics'
 
 model-paths: ["dbt_project/models"]
 analysis-paths: ["analyses"]
-test-paths: ["tests"]
+test-paths: ["dbt_project/tests"]
 seed-paths: ["seeds"]
 macro-paths: ["dbt_project/macros"]
 snapshot-paths: ["snapshots"]

@@ -4,7 +4,7 @@ Replaces: equity_pipeline() in ingestion/pipeline.py
 
 Schedule: Monday–Friday at 11pm ET (04:00 UTC next day)
 What it does:
-  1. Gets the full ticker list (~616 tickers)
+  1. Gets the full ticker list from RAW.TICKER_UNIVERSE (~1,600 tickers)
   2. Finds the latest date already in Snowflake (incremental boundary)
   3. Extracts new prices from yfinance + loads to RAW.PRICES
   4. Extracts company metadata + loads to RAW.COMPANY_INFO (full overwrite)
@@ -45,11 +45,19 @@ def equity_daily():
 
     @task()
     def get_tickers() -> list:
-        """Scrape S&P 500 from Wikipedia + hardcoded ETF list → ~616 tickers."""
-        from ingestion.extract import get_all_tickers
-        tickers = get_all_tickers()
-        logger.info("Loaded %d tickers", len(tickers))
-        return tickers
+        """
+        Load active tickers from RAW.TICKER_UNIVERSE (primary source).
+        Falls back to live Wikipedia scrape + hardcoded ETF list if DB is unreachable.
+        """
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            all_tickers, _ = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d tickers", len(all_tickers))
+        return all_tickers
 
     @task()
     def get_max_date() -> str | None:

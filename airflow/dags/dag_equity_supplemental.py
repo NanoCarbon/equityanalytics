@@ -48,19 +48,36 @@ def equity_supplemental_weekly():
 
     @task()
     def get_tickers() -> list:
-        """Resolve full ticker universe (S&P 1500 + ETFs, ~1,600 tickers)."""
-        from ingestion.extract import get_all_tickers
-        tickers = get_all_tickers()
-        logger.info("Loaded %d tickers", len(tickers))
-        return tickers
+        """
+        Load all active tickers from RAW.TICKER_UNIVERSE (primary source).
+        Falls back to Wikipedia scrape + ETF list if DB is unreachable.
+        """
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            all_tickers, _ = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d tickers", len(all_tickers))
+        return all_tickers
 
     @task()
     def get_equity_tickers() -> list:
-        """S&P 1500 equity-only tickers (~1,500) -- ETFs have no earnings or analyst coverage."""
-        from ingestion.extract import get_equity_tickers as _get_equity_tickers
-        equities = _get_equity_tickers()
-        logger.info("Loaded %d equity tickers", len(equities))
-        return equities
+        """
+        Load equity-only tickers from RAW.TICKER_UNIVERSE (is_equity=TRUE).
+        ETFs have no earnings, financial statements, or analyst coverage.
+        Falls back to Wikipedia scrape if DB is unreachable.
+        """
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            _, equity_tickers = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d equity tickers", len(equity_tickers))
+        return equity_tickers
 
     @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_dividends(tickers: list) -> int:

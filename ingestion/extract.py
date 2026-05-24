@@ -145,17 +145,53 @@ FALLBACK_SP600 = [
 ]
 
 
+def get_tickers_from_db(conn) -> tuple[List[str], List[str]]:
+    """
+    Primary ticker source: read active tickers from RAW.TICKER_UNIVERSE.
+
+    Returns (all_tickers, equity_tickers) where:
+      - all_tickers    : every active ticker (S&P 1500 + ETFs)
+      - equity_tickers : active tickers with is_equity=TRUE (S&P 1500, no ETFs)
+
+    Falls back to the Wikipedia scrape + hardcoded ETF list on any DB error.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT ticker, is_equity
+            FROM   EQUITY_ANALYTICS.RAW.TICKER_UNIVERSE
+            WHERE  is_active = TRUE
+            ORDER  BY ticker
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        all_tickers    = [r[0] for r in rows]
+        equity_tickers = [r[0] for r in rows if r[1]]
+        logger.info(
+            "Loaded %d active tickers from TICKER_UNIVERSE (%d equity, %d ETF/other)",
+            len(all_tickers), len(equity_tickers), len(all_tickers) - len(equity_tickers),
+        )
+        return all_tickers, equity_tickers
+    except Exception as exc:
+        logger.warning(
+            "Could not load TICKER_UNIVERSE from DB (%s) -- falling back to Wikipedia scrape",
+            exc,
+        )
+        all_t    = get_all_tickers()
+        equity_t = get_equity_tickers()
+        return all_t, equity_t
+
+
 def get_all_tickers() -> List[str]:
     """
-    Get the full S&P Composite 1500 + ETF ticker universe, deduplicated.
+    Fallback ticker source: scrape S&P 1500 components live from Wikipedia
+    and combine with the hardcoded ETF list.
 
-    S&P 1500 = S&P 500 (large-cap) + S&P 400 (mid-cap) + S&P 600 (small-cap).
-    Covers ~90% of US investable market cap. Together with the ETF list this
-    produces roughly 1,600 unique tickers.
+    Prefer get_tickers_from_db() at runtime -- this function is called by
+    get_tickers_from_db() on DB failure and by the ticker_universe_sync DAG
+    to build the universe that gets written to RAW.TICKER_UNIVERSE.
 
-    All three index lists are fetched live from Wikipedia on each call so index
-    rebalances are picked up automatically. Falls back to static lists if
-    Wikipedia is unavailable.
+    Falls back to static sample lists if Wikipedia is unreachable.
     """
     sp500 = get_sp500_tickers()
     sp400 = get_sp400_tickers()
@@ -171,10 +207,10 @@ def get_all_tickers() -> List[str]:
 
 def get_equity_tickers() -> List[str]:
     """
-    Get S&P 1500 equity-only tickers (no ETFs) -- for fundamentals extraction.
+    Fallback equity-only ticker source (no ETFs) -- for fundamentals extraction.
 
-    ETFs are excluded because they have no earnings, financial statements,
-    or analyst coverage. Returns ~1,500 tickers.
+    Prefer get_tickers_from_db() at runtime. This function is the fallback
+    when the DB is unreachable and is used by the ticker_universe_sync DAG.
     """
     sp500 = get_sp500_tickers()
     sp400 = get_sp400_tickers()

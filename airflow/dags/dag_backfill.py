@@ -46,10 +46,16 @@ def backfill_prices():
 
     @task()
     def get_tickers() -> list:
-        from ingestion.extract import get_all_tickers
-        tickers = get_all_tickers()
-        logger.info("Loaded %d tickers for backfill", len(tickers))
-        return tickers
+        """Load active tickers from RAW.TICKER_UNIVERSE; falls back to Wikipedia scrape."""
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            all_tickers, _ = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d tickers for backfill", len(all_tickers))
+        return all_tickers
 
     @task()
     def get_backfill_boundaries() -> dict:

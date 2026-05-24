@@ -45,7 +45,10 @@ ticker_max as (
 -- Add entries here when a staleness alert is investigated and confirmed benign.
 known_exclusions as (
     select * from (values
-        ('FDS')   -- occasionally missing from yfinance bulk download
+        ('FDS'),    -- occasionally missing from yfinance bulk download
+        ('CWEN-A'), -- dual-class share; yfinance bulk download omits hyphenated tickers
+        ('SNCY'),   -- Spirit Airlines reorganization / reduced trading activity
+        ('CSGS')    -- CSG Systems; intermittently missing from yfinance bulk download
     ) as t (ticker)
 )
 

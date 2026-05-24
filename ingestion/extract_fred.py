@@ -22,9 +22,14 @@ _RECOVER_FACTOR = 0.9   # multiply delay on each successful fetch
 
 CIRCUIT_BREAKER_THRESHOLD = 5
 
+# ---------------------------------------------------------------------------
+# FRED_SERIES — fallback name map used when no DB connection is available.
+# Canonical series selection lives in RAW.FRED_SELECTION (Snowflake).
+# Add new series there; update this dict only to keep local names in sync.
+# ---------------------------------------------------------------------------
 FRED_SERIES = {
     # ════════════════════════════════════════════════════════════════
-    # ORIGINAL SERIES (95 series)
+    # ORIGINAL SERIES
     # ════════════════════════════════════════════════════════════════
 
     # ── Interest rates ────────────────────────────────────────────
@@ -47,7 +52,6 @@ FRED_SERIES = {
     "T10Y2Y":        "10Y-2Y Treasury Spread",
     "T10Y3M":        "10Y-3M Treasury Spread",
     "T5YIFR":        "5-Year Forward Inflation Rate",
-    "DFII2":         "2-Year Real Treasury Yield (TIPS)",
     "DFII5":         "5-Year Real Treasury Yield (TIPS)",
     "DFII10":        "10-Year Real Treasury Yield (TIPS)",
     "DFII30":        "30-Year Real Treasury Yield (TIPS)",
@@ -96,7 +100,7 @@ FRED_SERIES = {
 
     # ── Credit and financial conditions ───────────────────────────
     "BAMLH0A0HYM2":  "High Yield OAS Spread",
-    "BAMLH0A3HYM2":  "CCC and Lower HY OAS Spread",
+    "BAMLH0A3HYC":   "ICE BofA CCC and Lower HY OAS Spread",
     "BAMLC0A0CM":    "Investment Grade OAS Spread",
     "DAAA":          "Moody's AAA Corporate Bond Yield",
     "DBAA":          "Moody's BAA Corporate Bond Yield",
@@ -154,7 +158,6 @@ FRED_SERIES = {
     "GASREGCOVW":    "Regular Gasoline Price (US Average)",
     "DHHNGSP":       "Henry Hub Natural Gas Spot Price",
     "APU000072610":  "Average Electricity Price",
-    "GOLDAMGBD228NLBM": "Gold Price (London AM Fix, USD/Troy oz)",
 
     # ── Market risk ───────────────────────────────────────────────
     "VIXCLS":        "CBOE VIX Volatility Index",
@@ -315,33 +318,25 @@ FRED_SERIES = {
 
     # ══════════════════════════════════════════════════════════════
     # WAVE 4 — Regional Fed Manufacturing Surveys
-    # Philly, Richmond, Dallas, KC monthly diffusion indices
-    # (Empire State NY Fed already loaded: GACDISA066MSFRBNY)
+    # Series IDs sourced from FRED_SERIES_CATALOG (verified valid).
+    # Richmond and Kansas City Fed surveys are not available on FRED.
+    # Empire State (NY Fed) already loaded: GACDISA066MSFRBNY
     # ══════════════════════════════════════════════════════════════
 
-    # Philadelphia Fed Business Outlook Survey (3rd District, monthly)
-    "PHFRBIND":    "Philly Fed: General Activity Index",
-    "PHFRBNDI":    "Philly Fed: New Orders Index",
-    "PHFRBP":      "Philly Fed: Prices Paid Index",
-    "PHFRBE":      "Philly Fed: Employment Index",
-    "PHFRBSIP":    "Philly Fed: Shipments Index",
+    # Philadelphia Fed Manufacturing Business Outlook Survey
+    "GACDFSA066MSFRBPHI": "Philly Fed: Current General Activity (Diffusion Index)",
+    "NOCDFSA066MSFRBPHI": "Philly Fed: Current New Orders (Diffusion Index)",
+    "PPCDFSA066MSFRBPHI": "Philly Fed: Current Prices Paid (Diffusion Index)",
+    "NECDFSA066MSFRBPHI": "Philly Fed: Current Employment (Diffusion Index)",
+    "SHCDFSA066MSFRBPHI": "Philly Fed: Current Shipments (Diffusion Index)",
 
-    # Richmond Fed Manufacturing Survey (5th District, monthly)
-    "RMBSIICS":    "Richmond Fed: Business Conditions Index",
-    "RMBSIE":      "Richmond Fed: Employment Index",
-
-    # Dallas Fed Manufacturing Outlook Survey (11th District, monthly)
-    "DALLASMI":    "Dallas Fed: General Business Activity",
-    "DALLASPE":    "Dallas Fed: Production Volume",
-    "DALLASEO":    "Dallas Fed: Employment",
-
-    # Kansas City Fed Manufacturing Survey (10th District, monthly)
-    "KANSASMI":    "Kansas City Fed: Manufacturing Activity",
-    "KANSASPE":    "Kansas City Fed: Production",
+    # Dallas Fed Texas Manufacturing Outlook Survey
+    "BACTSAMFRBDAL":      "Dallas Fed: Current General Business Activity (Diffusion Index)",
+    "PRODSAMFRBDAL":      "Dallas Fed: Current Production (Diffusion Index)",
+    "NEMPSAMFRBDAL":      "Dallas Fed: Current Employment (Diffusion Index)",
 
     # ══════════════════════════════════════════════════════════════
     # WAVE 5 — Government Finance / Fiscal
-    # Federal debt, deficit, expenditures — previously zero coverage
     # ══════════════════════════════════════════════════════════════
 
     "GFDEBTN":       "Federal Debt: Gross Federal Debt Outstanding",
@@ -351,24 +346,20 @@ FRED_SERIES = {
     "FGEXPND":       "Federal Government Current Expenditures",
     "GGSAVE":        "Government Net Saving",
     "FYONGDA188S":   "Federal Net Outlays as Percent of GDP",
-    "HBFRGDP":       "Federal Revenue as Percent of GDP",
+    "FYFRGDA188S":   "Federal Receipts as Percent of GDP",
 
     # ══════════════════════════════════════════════════════════════
     # WAVE 6 — Banking Profitability & Deposits
-    # NIM, ROE, ROA plus deposit flows and delinquency gaps
-    # Note: DRCCLACBS (credit cards), DRSFRMACBS (mortgages),
-    #       DRBLACBS (business), BUSLOANS, LOANS, DPSACBW027SBOG,
-    #       WTREGEN already loaded — adding profitability + gaps.
     # ══════════════════════════════════════════════════════════════
 
-    "USNIM":       "Net Interest Margin: All U.S. Banks",
-    "USROE":       "Return on Equity: All U.S. Banks",
-    "USROA":       "Return on Assets: All U.S. Banks",
-    "DRCLACBS":    "Consumer Loan Delinquency Rate: All Commercial Banks",
-    "WDTGAL":      "Total Deposits at All Commercial Banks",
-    "DPRIME":      "Bank Prime Loan Rate",
-    "DTCTMFNM":    "Large Time Deposits at Commercial Banks",
-    "EQTATOA":     "Bank Equity to Total Assets: All Commercial Banks",
+    "USNIM":          "Net Interest Margin: All U.S. Banks",
+    "USROE":          "Return on Equity: All U.S. Banks",
+    "USROA":          "Return on Assets: All U.S. Banks",
+    "DRCLACBS":       "Consumer Loan Delinquency Rate: All Commercial Banks",
+    "WDTGAL":         "Total Deposits at All Commercial Banks",
+    "DPRIME":         "Bank Prime Loan Rate",
+    "LTDACBM027NBOG": "Large Time Deposits: All Commercial Banks",
+    "EQTA":           "Total Equity to Total Assets for Banks",
 }
 
 # Series that require a paid FRED subscription — excluded to avoid 403 errors
@@ -376,18 +367,53 @@ FRED_SERIES = {
 # Use yfinance (^GSPC, ^IXIC, ^DJI, etc.) for equity index prices instead.
 
 
+def get_selected_fred_series(conn) -> dict[str, str]:
+    """
+    Return {series_id: local_name} for all active series in RAW.FRED_SELECTION.
+
+    This is the canonical source for which series to extract.  The catalog
+    refresh auto-deactivates entries whose series_id disappears from FRED.
+    Falls back to the module-level FRED_SERIES dict on any DB error so that
+    the daily DAG never fails purely due to a metadata lookup problem.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.series_id, COALESCE(s.local_name, c.title, s.series_id) AS local_name
+            FROM   EQUITY_ANALYTICS.RAW.FRED_SELECTION s
+            LEFT   JOIN EQUITY_ANALYTICS.RAW.FRED_SERIES_CATALOG c
+                   ON c.series_id = s.series_id
+            WHERE  s.is_active = TRUE
+            ORDER  BY s.series_id
+        """)
+        result = {row[0]: row[1] for row in cur.fetchall()}
+        cur.close()
+        logger.info("Loaded %d active series from FRED_SELECTION", len(result))
+        return result
+    except Exception as exc:
+        logger.warning(
+            "Could not load FRED_SELECTION from DB (%s) — falling back to local FRED_SERIES dict",
+            exc,
+        )
+        return dict(FRED_SERIES)
+
+
 def extract_fred_series(
     api_key: str,
     series_id: str,
     start_date: str | None = None,
     lookback_days: int = 365,
+    series_name: str | None = None,
 ) -> pd.DataFrame:
     """
     Extract a single FRED series.
 
     start_date overrides lookback_days when provided.
     Pass start_date='1900-01-01' to fetch full available history.
+    series_name: human-readable label written to the series_name column.
+                 Falls back to FRED_SERIES dict, then series_id if omitted.
     Returns empty DataFrame if series not found or request fails.
+    Returns None on network failure (signals circuit breaker in caller).
     """
     if start_date is None:
         start_date = (datetime.today() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
@@ -426,7 +452,7 @@ def extract_fred_series(
         df = df[df["value"] != "."]
         df["value"] = df["value"].astype(float)
         df["series_id"]   = series_id
-        df["series_name"] = FRED_SERIES.get(series_id, series_id)
+        df["series_name"] = series_name or FRED_SERIES.get(series_id, series_id)
         df["date"]        = pd.to_datetime(df["date"])
         df["extracted_at"] = datetime.utcnow()
 
@@ -449,25 +475,31 @@ def extract_all_fred_series(
     api_key: str,
     start_date: str | None = None,
     lookback_days: int = 365,
+    series_dict: dict[str, str] | None = None,
 ) -> pd.DataFrame:
     """
-    Extract all configured FRED series and combine into one DataFrame.
+    Extract all selected FRED series and combine into one DataFrame.
 
+    series_dict: {series_id: local_name} to extract.  If None, falls back to
+                 the module-level FRED_SERIES dict (no DB connection required).
     Pass start_date='1900-01-01' to fetch full available history for backfill.
     A 0.5-second delay between calls prevents 429 rate-limit errors.
     """
+    active_series = series_dict if series_dict is not None else FRED_SERIES
     frames = []
     skipped = 0
-    total = len(FRED_SERIES)
+    total = len(active_series)
     consecutive_failures = 0
     delay = _DELAY_BASE
 
-    for i, series_id in enumerate(FRED_SERIES, 1):
+    for i, (series_id, series_name) in enumerate(active_series.items(), 1):
         logger.info("Fetching %s (%d/%d)... (delay=%.2fs)", series_id, i, total, delay)
 
         while True:  # retry loop: only retries on 429
             try:
-                result = extract_fred_series(api_key, series_id, start_date, lookback_days)
+                result = extract_fred_series(
+                    api_key, series_id, start_date, lookback_days, series_name
+                )
                 break
             except _RateLimitError:
                 delay = min(delay * _BACKOFF_FACTOR, _DELAY_MAX)

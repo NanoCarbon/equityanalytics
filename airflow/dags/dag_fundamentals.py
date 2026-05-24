@@ -46,19 +46,19 @@ def fundamentals_weekly():
     @task()
     def get_equity_tickers() -> list:
         """
-        Get all tickers, then filter out ETFs.
-        yfinance has no financial statements for ETFs (no 10-K filings).
-        Returns ~500 equity tickers.
+        Load equity-only tickers from RAW.TICKER_UNIVERSE (is_equity=TRUE).
+        ETFs have no 10-K filings and are excluded from financial statements.
+        Falls back to Wikipedia scrape if DB is unreachable.
         """
-        from ingestion.extract import get_all_tickers, get_etf_tickers
-        all_tickers = get_all_tickers()
-        etf_set = set(get_etf_tickers())
-        equities = [t for t in all_tickers if t not in etf_set]
-        logger.info(
-            "Filtered to %d equity tickers (%d ETFs excluded)",
-            len(equities), len(all_tickers) - len(equities),
-        )
-        return equities
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            _, equity_tickers = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d equity tickers", len(equity_tickers))
+        return equity_tickers
 
     @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_statements(equity_tickers: list) -> int:
@@ -107,11 +107,20 @@ def valuation_daily():
 
     @task()
     def get_all_tickers() -> list:
-        """Get all ~616 tickers (equities + ETFs — valuation metrics exist for ETFs too)."""
-        from ingestion.extract import get_all_tickers as _get_all_tickers
-        tickers = _get_all_tickers()
-        logger.info("Loaded %d tickers", len(tickers))
-        return tickers
+        """
+        Load all active tickers from RAW.TICKER_UNIVERSE (equities + ETFs).
+        Valuation metrics (PE, P/B, etc.) are available for ETFs too.
+        Falls back to Wikipedia scrape if DB is unreachable.
+        """
+        from ingestion.extract import get_tickers_from_db
+        from ingestion.load import get_connection
+        conn = get_connection()
+        try:
+            all_tickers, _ = get_tickers_from_db(conn)
+        finally:
+            conn.close()
+        logger.info("Loaded %d tickers", len(all_tickers))
+        return all_tickers
 
     @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_valuations(tickers: list) -> int:
