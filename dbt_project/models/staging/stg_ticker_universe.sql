@@ -12,6 +12,10 @@ select
     source,
     is_active,
     is_equity,
+    exchange,
+    country,
+    yfinance_suffix,
+    fundamentals_cohort,
     added_at,
     deactivated_at,
     deactivation_reason

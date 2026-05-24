@@ -5,7 +5,14 @@ models:
   # ── Ticker reference ──────────────────────────────────────────────────────────
 
   - name: stg_ticker_universe
-    description: "Canonical ticker list. Grain: ticker."
+    description: >
+      Canonical ticker list. Grain: ticker.
+      Sources: sp500/sp400/sp600 (S&P Wikipedia), etf (hardcoded list),
+      nasdaq_trader (NASDAQ Trader flat file — all US exchange-listed),
+      ftse100/tsx60/asx200/nikkei225/dax40 (international index Wikipedia pages).
+      yfinance_suffix is '' for US tickers and '.L'/'.TO'/'.AX'/'.T'/'.DE'
+      for international tickers. fundamentals_cohort (0-3) drives the rotating
+      weekly fundamentals extraction schedule; NULL for ETFs.
     columns:
       - name: ticker
         tests:
@@ -15,13 +22,21 @@ models:
         tests:
           - not_null
           - accepted_values:
-              values: ['sp500', 'sp400', 'sp600', 'etf', 'manual']
+              values: ['sp500', 'sp400', 'sp600', 'etf', 'manual',
+                       'nasdaq_trader',
+                       'ftse100', 'tsx60', 'asx200', 'nikkei225', 'dax40']
       - name: is_active
         tests:
           - not_null
       - name: is_equity
         tests:
           - not_null
+      - name: country
+        description: "ISO-2 country code. US for all domestic tickers."
+      - name: yfinance_suffix
+        description: "Suffix appended to base symbol for yfinance calls. Empty string for US."
+      - name: fundamentals_cohort
+        description: "0-3 rotating cohort for weekly fundamentals extraction. NULL for ETFs."
 
   # ── Price and company data ────────────────────────────────────────────────────
 
