@@ -18,12 +18,15 @@ Valuation metrics come from yf.Ticker().info — same call as company metadata
 but loaded to a separate table with different grain (point-in-time snapshot vs SCD).
 """
 
+import logging
 import math
 import yfinance as yf
 import pandas as pd
 import time
 from datetime import datetime
 from typing import List
+
+logger = logging.getLogger(__name__)
 
 _DELAY_MAX      = 30.0
 _BACKOFF_FACTOR = 2.0
@@ -126,39 +129,37 @@ def extract_financial_statements(
                             all_frames.append(normalized)
                             ticker_got_data = True
                     except Exception as e:
-                        print(f"  Warning: {ticker} {stmt_type} ({freq}) failed: {e}")
+                        logger.warning("%s %s (%s) failed: %s", ticker, stmt_type, freq, e)
 
             if ticker_got_data:
                 tickers_with_data += 1
 
             if i % 25 == 0:
-                print(f"  Fundamentals progress: {i}/{total} tickers ({tickers_with_data} with data so far)")
+                logger.info("Fundamentals progress: %d/%d tickers (%d with data so far)", i, total, tickers_with_data)
 
             delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
 
         except Exception as e:
-            print(f"Warning: could not process {ticker}: {e}")
+            logger.warning("Could not process %s: %s", ticker, e)
             skipped.append(ticker)
             delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
-        # Per-ticker delay
         if i < total:
             time.sleep(delay)
 
-        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
         if i % batch_size == 0 and i < total:
-            print(f"  Batch pause {batch_pause}s after {i} tickers ({tickers_with_data} with data so far)...")
+            logger.info("Batch pause %ds after %d tickers (%d with data so far)...", batch_pause, i, tickers_with_data)
             time.sleep(batch_pause)
 
     if skipped:
-        print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
+        logger.warning("Skipped %d tickers: %s%s", len(skipped), skipped[:10], '...' if len(skipped) > 10 else '')
 
     if not all_frames:
-        print("No financial statement data extracted")
+        logger.warning("No financial statement data extracted")
         return pd.DataFrame()
 
     result = pd.concat(all_frames, ignore_index=True)
-    print(f"Extracted {len(result)} financial statement rows for {tickers_with_data} tickers")
+    logger.info("Extracted %d financial statement rows for %d tickers", len(result), tickers_with_data)
     return result
 
 
@@ -267,12 +268,12 @@ def extract_valuation_metrics(
             records.append(row)
 
             if i % 25 == 0:
-                print(f"  Valuation progress: {i}/{total} tickers")
+                logger.info("Valuation progress: %d/%d tickers", i, total)
 
             delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
 
         except Exception as e:
-            print(f"Warning: could not fetch valuation for {ticker}: {e}")
+            logger.warning("Could not fetch valuation for %s: %s", ticker, e)
             skipped.append(ticker)
             records.append({
                 "ticker": ticker,
@@ -282,20 +283,18 @@ def extract_valuation_metrics(
             })
             delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
-        # Per-ticker delay
         if i < total:
             time.sleep(delay)
 
-        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
         if i % batch_size == 0 and i < total:
-            print(f"  Batch pause {batch_pause}s after {i} tickers...")
+            logger.info("Batch pause %ds after %d tickers...", batch_pause, i)
             time.sleep(batch_pause)
 
     if skipped:
-        print(f"Skipped {len(skipped)} tickers: {skipped[:10]}{'...' if len(skipped) > 10 else ''}")
+        logger.warning("Skipped %d tickers: %s%s", len(skipped), skipped[:10], '...' if len(skipped) > 10 else '')
 
     result = pd.DataFrame(records)
-    print(f"Extracted valuation metrics for {len(result)} tickers")
+    logger.info("Extracted valuation metrics for %d tickers", len(result))
     return result
 
 

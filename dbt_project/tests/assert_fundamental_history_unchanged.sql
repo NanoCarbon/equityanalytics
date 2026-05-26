@@ -24,7 +24,7 @@ with sampled_tickers as (
     select distinct ticker
     from {{ ref('fact_fundamentals') }}
     where frequency = 'annual'
-    qualify abs(hash(ticker)) % 67 = 0
+      and abs(hash(ticker)) % 67 = 0
 ),
 
 recent_annual_periods as (
