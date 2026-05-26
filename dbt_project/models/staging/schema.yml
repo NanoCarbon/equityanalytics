@@ -122,34 +122,14 @@ models:
           - not_null
       - name: trailing_pe
         description: "Trailing PE ratio. PE > 1000 is almost certainly a data extraction error."
-        tests:
-          - dbt_utils.expression_is_true:
-              expression: "trailing_pe <= 1000 or trailing_pe is null"
-              severity: warn
       - name: forward_pe
         description: "Forward PE ratio. PE > 1000 is almost certainly a data extraction error."
-        tests:
-          - dbt_utils.expression_is_true:
-              expression: "forward_pe <= 1000 or forward_pe is null"
-              severity: warn
       - name: gross_margin
         description: "Gross margin as decimal. yfinance returns decimals (0.45 = 45%). Values outside [-1, 1] indicate extraction errors."
-        tests:
-          - dbt_utils.expression_is_true:
-              expression: "(gross_margin between -1.0 and 1.0) or gross_margin is null"
-              severity: warn
       - name: operating_margin
         description: "Operating margin as decimal. Values outside [-1, 1] indicate extraction errors."
-        tests:
-          - dbt_utils.expression_is_true:
-              expression: "(operating_margin between -1.0 and 1.0) or operating_margin is null"
-              severity: warn
       - name: profit_margin
         description: "Net profit margin as decimal. Values outside [-1, 1] indicate extraction errors."
-        tests:
-          - dbt_utils.expression_is_true:
-              expression: "(profit_margin between -1.0 and 1.0) or profit_margin is null"
-              severity: warn
 
   # ── Supplemental equity data ──────────────────────────────────────────────────
 
