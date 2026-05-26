@@ -1,5 +1,5 @@
 """
-DAG: macro_daily
+DAG: fred_macro_daily
 Schedule: Monday–Friday at 11pm ET (04:00 UTC next day)
 
 What it does:
@@ -32,15 +32,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='macro_daily',
-    description='FRED macro indicators → Snowflake RAW (daily)',
+    dag_id='fred_macro_daily',
+    description='FRED | Macro indicator observations → Snowflake RAW | daily',
     schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['macro', 'daily'],
+    tags=['fred', 'macro', 'daily'],
 )
-def macro_daily():
+def fred_macro_daily():
 
     @task(retries=3, retry_delay=timedelta(minutes=1), execution_timeout=timedelta(hours=2))
     def extract_and_load_macro() -> int:
@@ -94,4 +94,4 @@ def macro_daily():
     extract_and_load_macro()
 
 
-macro_daily()
+fred_macro_daily()
