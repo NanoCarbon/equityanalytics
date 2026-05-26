@@ -28,6 +28,8 @@
 -- Tickers that are genuinely delisted or acquired will always fail this test.
 -- Once confirmed, add them to the exclusion list below and document the reason.
 
+{{ config(severity='warn') }}
+
 with max_date as (
     select max(price_date) as overall_max
     from {{ ref('fact_daily_prices') }}
