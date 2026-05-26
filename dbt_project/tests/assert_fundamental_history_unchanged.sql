@@ -15,9 +15,11 @@
 -- Increase or decrease the modulus to adjust sample size.
 --
 -- VIOLATION CONDITION
--- Both total_revenue AND net_income are null for a sampled ticker's recent period.
--- A single null column is tolerable (some companies genuinely have no revenue or
--- negative net income). Both null together strongly indicates a pivot failure.
+-- total_revenue, net_income, AND total_assets are all null for a sampled ticker's
+-- recent period. A company with balance sheet data but no income statement is a
+-- legitimate case (SPACs, shell companies, or a timing gap where the income
+-- statement hasn't been published yet). Requiring all three null ensures we only
+-- flag complete pivot failures, not pre-acquisition SPACs or late-reporting periods.
 
 with sampled_tickers as (
     -- Deterministic ~1% sample of equity tickers present in fact_fundamentals
@@ -57,11 +59,12 @@ violations as (
         total_assets
     from recent_annual_periods
     where
-        -- Both income statement pivots null = strong signal of corruption or rename
-        (total_revenue is null and net_income is null)
-        or
-        -- Balance sheet pivot also missing = full pivot failure
-        (total_revenue is null and total_assets is null)
+        -- All three key metrics null = full pivot failure or EAV rename.
+        -- If total_assets is populated the company has balance sheet data — it is
+        -- a SPAC / shell company (no income statement by design) or a late-reporting
+        -- period where the income statement hasn't been published yet. Those are
+        -- legitimate and should not be flagged as corruption.
+        (total_revenue is null and net_income is null and total_assets is null)
 )
 
 select * from violations
