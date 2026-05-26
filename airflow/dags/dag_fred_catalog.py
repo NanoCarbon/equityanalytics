@@ -66,7 +66,7 @@ DEFAULT_ARGS = {
 )
 def fred_catalog_refresh():
 
-    @task(retries=1, retry_delay=timedelta(minutes=10), execution_timeout=timedelta(hours=1))
+    @task(retries=1, retry_delay=timedelta(minutes=10), execution_timeout=timedelta(hours=2))
     def build_and_load_catalog() -> dict:
         """
         Crawl all FRED releases, collect series metadata, and overwrite

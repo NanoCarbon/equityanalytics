@@ -16,6 +16,18 @@ cleaned as (
     where value is not null
       and ticker is not null
       and line_item is not null
+),
+
+deduped as (
+    -- RAW.FINANCIAL_STATEMENTS is append-only; repeated extractions for the same
+    -- ticker/period produce duplicate EAV rows. Keep the most recently extracted
+    -- value per grain (ticker, statement_type, frequency, period_end_date, line_item).
+    select *
+    from cleaned
+    qualify row_number() over (
+        partition by ticker, statement_type, frequency, period_end_date, line_item
+        order by extracted_at desc
+    ) = 1
 )
 
-select * from cleaned
+select * from deduped

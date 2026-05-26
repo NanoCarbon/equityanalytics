@@ -49,7 +49,7 @@ DEFAULT_ARGS = {
 )
 def macro_backfill():
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_full_history() -> int:
         """
         Fetch complete history for all ~108 FRED series and overwrite

@@ -6,42 +6,72 @@ This file is read by Claude Code at the start of every session. Keep it current.
 
 ## What this project is
 
-A production-style ELT pipeline and analytics application:
+A production-style ELT pipeline and AI-powered analytics application:
 - **Ingestion:** Python + yfinance + FRED API, orchestrated by Apache Airflow on local Docker
-- **Warehouse:** Snowflake (`EQUITY_ANALYTICS` DB) with three schemas: RAW → STAGING → MARTS
+- **Warehouse:** Snowflake (`EQUITY_ANALYTICS` DB) — three schemas: RAW → STAGING → MARTS
 - **Transformation:** dbt Core (Kimball dimensional model)
 - **Application:** Streamlit + Claude API (natural language → SQL → Plotly chart)
 - **CI/CD:** GitHub Actions (dbt tests + AI code review on every PR)
 
 ---
 
+## Current state (as of May 2026)
+
+- **12,524 tickers** in `RAW.TICKER_UNIVERSE` — S&P Composite 1500, all US exchange-listed securities (NASDAQ Trader), and 5 international indices (FTSE 100, TSX 60, ASX 200, Nikkei 225, DAX 40)
+- **All backfill waves complete (1–11)** — prices, company_info, financials, and valuation loaded from 2010-01-01 for all tickers
+- **dbt full-refresh complete** — `fact_daily_prices`, `fact_fundamentals`, `fact_valuation_snapshot` rebuilt; PASS=23, WARN=2, ERROR=0
+- **6,100 active FRED macro series** — all 4 catalog-expansion batches complete; 4.1M RAW rows; 1.84M mart rows
+- **Branch:** `yfinance-phase3-international`
+
+### Ticker universe breakdown
+
+| Source | Count | Country | yfinance suffix |
+|---|---|---|---|
+| nasdaq_trader | 10,280 | US | (none) |
+| sp600 | 603 | US | (none) |
+| sp500 | 503 | US | (none) |
+| sp400 | 400 | US | (none) |
+| nikkei225 | 225 | JP | `.T` |
+| asx200 | 200 | AU | `.AX` |
+| etf | 113 | US | (none) |
+| ftse100 | 100 | GB | `.L` |
+| tsx60 | 60 | CA | `.TO` |
+| dax40 | 40 | DE | `.DE` (most); `.PA` for Airbus |
+| **TOTAL** | **12,524** | | |
+
+7,293 equities (fundamentals eligible) / 5,231 ETFs.
+
+---
+
 ## Running things
 
-### dbt (run from repo root — `profiles.yml` is here)
+### dbt (run from repo root — `profiles.yml` lives here)
 
-dbt does NOT auto-read `.env`. Load env vars first every time:
+dbt does NOT auto-read `.env`. Load env vars first:
 
 ```powershell
 # Windows PowerShell
-Get-Content .env | ForEach-Object {
-    if ($_ -match '^([^#][^=]*)=(.*)$') {
-        [System.Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), 'Process')
-    }
+Get-Content .env | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '=' } | ForEach-Object {
+    $k, $v = $_ -split '=', 2; Set-Item "env:$($k.Trim())" $v.Trim()
 }
 ```
 
-Then:
-```powershell
-dbt build --profiles-dir .                                              # all models + tests
-dbt build --profiles-dir . --select fact_macro_readings --full-refresh  # single model full-refresh
-dbt build --profiles-dir . --select +fact_fundamentals --full-refresh   # model + upstream
-dbt test --profiles-dir .                                               # tests only
-dbt debug --profiles-dir .                                              # verify connection
+```bash
+# Git Bash
+set -a && source .env && set +a
+export SNOWFLAKE_PRIVATE_KEY_PATH="$(pwd)/snowflake_private_key.pem"
 ```
 
-dbt binary path (Windows Store Python): `C:\Users\edwar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\Scripts\dbt.exe`
+Then run from `dbt_project/` or pass `--profiles-dir ..`:
+```bash
+dbt debug --profiles-dir ..
+dbt build --profiles-dir ..
+dbt build --profiles-dir .. --select fact_daily_prices --full-refresh
+dbt build --profiles-dir .. --select fact_daily_prices fact_fundamentals fact_valuation_snapshot --full-refresh
+dbt test  --profiles-dir ..
+```
 
-**dbt is NOT installed inside the Airflow Docker container.** Always run dbt locally.
+**dbt is NOT installed inside Airflow Docker containers.** Always run locally.
 
 ### Airflow (Docker Compose, local)
 
@@ -51,30 +81,55 @@ docker compose down                                         # stop (keeps data)
 docker compose ps                                           # check status
 ```
 
-Airflow UI: `http://localhost:8080` (admin / admin for local dev)
+UI: `http://localhost:8080` (admin / admin for local dev)
 
-Trigger a DAG manually:
+Trigger a DAG:
 ```powershell
 docker compose exec airflow-webserver airflow dags trigger <dag_id>
 ```
 
-REST API (alternative):
-```powershell
-curl -s -X POST "http://localhost:8080/api/v1/dags/<dag_id>/dagRuns" `
-  -H "Content-Type: application/json" -u "admin:admin" -d '{}'
-```
+**`docker compose restart` does NOT reload env vars.** Always use `up -d` after env var changes.
 
-### App
+### Streamlit app
 
 ```powershell
 streamlit run app/streamlit_app.py --server.port 8501
 ```
 
-Or double-click `equity_analytics.bat` — it does: docker up → wait for Airflow → db_health_check → Streamlit.
+Or double-click `equity_analytics.bat` — does: docker up → Airflow health wait → db_health_check → Streamlit.
+
+### Backfill script (for future ticker additions)
+
+```bash
+# Generate missing-ticker file
+python -c "
+import sys; sys.path.insert(0, '.')
+from ingestion.load import get_connection, get_loaded_tickers
+conn = get_connection()
+cur = conn.cursor()
+cur.execute('SELECT ticker FROM EQUITY_ANALYTICS.RAW.TICKER_UNIVERSE WHERE is_active = TRUE ORDER BY source, ticker')
+universe = [r[0] for r in cur.fetchall()]
+cur.close(); conn.close()
+loaded = get_loaded_tickers('PRICES')
+missing = [t for t in universe if t not in loaded]
+open('scripts/backfill_missing.txt', 'w').write('\n'.join(missing))
+print(f'{len(missing)} tickers to backfill')
+"
+
+# Launch
+nohup python scripts/backfill.py \
+  --tickers-file scripts/backfill_missing.txt \
+  --start 2010-01-01 \
+  --types prices company_info financials valuation \
+  > logs/backfill_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+echo "PID: $!"
+```
+
+`scripts/backfill.py` is fully idempotent — each data type independently skips already-loaded tickers. Safe to re-run after interruption.
 
 ---
 
-## Architecture constraints
+## Architecture
 
 ### Data flow — never skip layers
 ```
@@ -82,28 +137,73 @@ yfinance / FRED API  →  RAW (append/overwrite)  →  dbt STAGING  →  dbt MAR
 ```
 RAW is append-only source of truth. Never write directly to STAGING or MARTS from Python.
 
+### Warehouse schema
+
+```
+EQUITY_ANALYTICS
+├── RAW
+│   ├── TICKER_UNIVERSE         -- canonical ticker list (12,524 tickers); FK source for all RAW tables
+│   │     columns: ticker (PK), source, is_active, is_equity, exchange, country,
+│   │              yfinance_suffix, fundamentals_cohort (0–3 or NULL for ETFs), added_at, deactivated_at
+│   │     Source priority MERGE rule: sp500 > sp400 > sp600 > etf > nasdaq_trader (S&P/ETF never overwritten)
+│   ├── PRICES                  -- daily OHLCV, ~25M+ rows, 2010–present, incremental append
+│   ├── COMPANY_INFO            -- metadata snapshot, overwrite each run
+│   ├── MACRO_INDICATORS        -- 6,100 FRED series, 4.1M rows, incremental append
+│   ├── FINANCIAL_STATEMENTS    -- EAV format (income/balance/cashflow), weekly overwrite
+│   ├── VALUATION_METRICS       -- point-in-time ratios, daily append
+│   ├── DIVIDENDS_AND_SPLITS    -- full corporate action history, weekly overwrite
+│   ├── EARNINGS_HISTORY        -- EPS actuals vs. estimates, weekly overwrite
+│   ├── ANALYST_RECOMMENDATIONS -- upgrade/downgrade history, weekly overwrite
+│   ├── ANALYST_PRICE_TARGETS   -- consensus price target snapshot, weekly append
+│   ├── FRED_RELEASES           -- FRED publication metadata, monthly overwrite
+│   ├── FRED_SERIES_CATALOG     -- all FRED series metadata (~800K rows), monthly overwrite
+│   ├── FRED_SELECTION          -- canonical selection: which series to extract (persists across refreshes)
+│   └── VW_FRED_HYGIENE         -- view: latest/prev obs date + row count per series
+├── STAGING (views)             -- 13 stg_* models; one per RAW source
+├── INTERMEDIATE (views)        -- int_daily_returns, int_fundamentals_pivoted
+└── MARTS (tables)              -- dim_date, dim_security, fact_daily_prices, fact_macro_readings,
+                                   fact_fundamentals, fact_valuation_snapshot
+```
+
+Key Snowflake quirk: DATE columns in RAW are stored as nanosecond Unix epoch (NUMBER(38,0)).
+Convert with: `TO_DATE(DATEADD(second, date / 1000000000, '1970-01-01'))`
+
 ### Incremental vs. full-refresh rules
+
 | Table | Strategy | Why |
 |---|---|---|
 | RAW.PRICES | Incremental append (by date) | Too large to reload daily |
-| RAW.MACRO_INDICATORS | Incremental append (7-day overlap) | Preserves FRED backfill |
-| RAW.COMPANY_INFO | Full overwrite | Small, always-current |
-| RAW.FINANCIAL_STATEMENTS | Full overwrite | Catches restatements |
+| RAW.MACRO_INDICATORS | Incremental append (7-day overlap) | Preserves FRED backfill; catches revisions |
+| RAW.COMPANY_INFO | Full overwrite | Small, always-current snapshot |
+| RAW.FINANCIAL_STATEMENTS | Full overwrite | Catches retroactive restatements |
 | RAW.VALUATION_METRICS | Daily append | Builds point-in-time time series |
-| All other RAW supplemental | Weekly overwrite | Small, corrections needed |
+| All supplemental RAW tables | Weekly overwrite | Small, corrections needed |
 
-### Adding new FRED series
-1. Add to `FRED_SERIES` dict in `ingestion/extract_fred.py`
-2. Add to `FRED_CATEGORIES` dict in `agents/prompts.py`
-3. Trigger `fred_new_series_backfill` DAG (only fetches NEW series — safe to run anytime)
-4. `dbt build --profiles-dir . --select fact_macro_readings --full-refresh`
+Adding new tickers always requires `dbt build --select fact_daily_prices --full-refresh` — incremental filter misses brand-new tickers.
 
-Do NOT trigger `macro_backfill` (full overwrite of ALL series) unless intentionally refreshing all FRED history.
+---
 
-### Adding new equity tickers
-1. Tickers from S&P 1500 are auto-detected via Wikipedia scraping on every run
-2. For manual additions: trigger `equity_daily`, then `dbt build --select fact_daily_prices --full-refresh`
-3. Same for fundamentals: trigger `fundamentals_weekly`, then `dbt build --select +fact_fundamentals --full-refresh`
+## DAGs
+
+All scheduled DAGs run at 11pm ET (04:00 UTC). LocalExecutor — multiple DAGs run as concurrent subprocesses.
+
+| DAG | Schedule | File | Description |
+|---|---|---|---|
+| `ticker_universe_sync` | 3am ET Mon–Fri (`0 8 * * 2-6`) | dag_ticker_universe_sync.py | Three chained tasks: sync_sp_indices → sync_nasdaq_trader → sync_international_indices (Mon ET only) |
+| `equity_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_equity_daily.py | Prices (incremental) + company info (overwrite) |
+| `macro_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_macro_daily.py | FRED macro series (reads FRED_SELECTION at runtime, incremental) |
+| `valuation_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_fundamentals.py | Valuation snapshot (daily append) |
+| `fundamentals_weekly` | 11pm ET Saturday (`0 4 * * 0`) | dag_fundamentals.py | Financial statements for ~7,293 equity tickers (full overwrite) |
+| `equity_supplemental_weekly` | 11pm ET Saturday (`0 4 * * 0`) | dag_equity_supplemental.py | Dividends, earnings, analyst data |
+| `fred_catalog_refresh` | 11pm ET 1st of month (`0 4 2 * *`) | dag_fred_catalog.py | FRED metadata catalog (monthly overwrite) |
+| `backfill_prices` | None (manual) | dag_backfill.py | Historical OHLCV back to 2010 |
+| `backfill_new_tickers` | None (manual) | dag_backfill_new_tickers.py | Backfill only tickers not yet in RAW.PRICES |
+| `macro_backfill` | None (manual, **paused**) | dag_macro_backfill.py | Full FRED history, all series — full overwrite (dangerous) |
+| `fred_new_series_backfill` | None (manual) | dag_fred_new_series_backfill.py | Full history for NEW series only — append-safe, idempotent |
+
+`ticker_universe_sync` runs 1 hour before `equity_daily` so DAGs always read a fresh ticker list.
+
+`sync_international_indices` checks `logical_date.weekday() == 1` (Tuesday UTC = Monday ET) — skips Tue–Fri since index membership only changes at quarterly rebalances.
 
 ---
 
@@ -111,108 +211,121 @@ Do NOT trigger `macro_backfill` (full overwrite of ALL series) unless intentiona
 
 | File | Purpose |
 |---|---|
-| `ingestion/extract_fred.py` | `FRED_SERIES` dict (175 series), `extract_all_fred_series()`, `extract_fred_series()` |
-| `ingestion/extract.py` | yfinance: prices, company info, dividends, earnings, analyst data |
+| `ingestion/extract.py` | yfinance: prices, company info, dividends, earnings, analyst data; `get_tickers_from_db(conn)` primary ticker source |
+| `ingestion/extract_ticker_universe.py` | Ticker universe: `fetch_nasdaq_trader_us()`, `fetch_ftse100/tsx60/asx200/nikkei225/dax40()` |
+| `ingestion/seed_ticker_universe.py` | One-shot seeder: S&P/ETF + NASDAQ Trader + international MERGE, cohort assignment |
+| `ingestion/extract_fred.py` | FRED API: `FRED_SERIES` dict is fallback-only; `get_selected_fred_series(conn)` reads from RAW.FRED_SELECTION |
+| `ingestion/extract_fred_catalog.py` | FRED releases + series catalog crawler |
 | `ingestion/extract_fundamentals.py` | Financial statements (EAV) + valuation metrics |
 | `ingestion/load.py` | `load_dataframe()`, `get_connection()`, `get_max_date()`, `get_loaded_tickers()` |
-| `ingestion/extract_fred_catalog.py` | FRED release crawler (monthly) |
-| `airflow/dags/dag_macro_daily.py` | `macro_daily` DAG — daily incremental FRED append |
-| `airflow/dags/dag_fred_new_series_backfill.py` | `fred_new_series_backfill` — new series only, safe to re-run |
-| `airflow/dags/dag_macro_backfill.py` | `macro_backfill` — full overwrite of all series (paused; manual only) |
-| `app/streamlit_app.py` | Main app entry point (4 tabs: Overview, AI Analytics, Event Study, DB Health) |
-| `app/components/db_health.py` | DB Health tab — Snowflake checks, thresholds, security gate |
-| `app/components/overview.py` | Overview tab — stack, data coverage, example prompts |
-| `app/components/chat.py` | AI Analytics tab — Claude SQL generation + Plotly |
-| `app/db/snowflake.py` | `execute_sql_cached()`, `_load_private_key()` (supports both file path and PEM string) |
-| `agents/prompts.py` | `SYSTEM_PROMPT` (schema context for SQL generation), `FRED_CATEGORIES` |
-| `dbt_project/models/` | staging / intermediate / marts dbt models |
+| `scripts/backfill.py` | Parameterized backfill CLI: `--tickers-file`, `--source`, `--missing`, `--types`, rate-limit flags; idempotent |
 | `scripts/db_health_check.py` | Standalone health check — run anytime, exits 0/1 |
-| `scripts/create_fred_hygiene_view.py` | One-shot: creates `VW_FRED_HYGIENE` in Snowflake RAW |
-| `profiles.yml` | dbt connection profile (gitignored; reads from env vars) |
+| `app/streamlit_app.py` | Main app entry point (4 tabs: Overview, AI Analytics, Event Study, DB Health) |
+| `app/components/chat.py` | AI Analytics tab — Claude SQL generation + Plotly |
+| `app/db/snowflake.py` | `execute_sql_cached()`, `_load_private_key()` (supports file path and PEM string for Community Cloud) |
+| `agents/prompts.py` | `SYSTEM_PROMPT` (schema context for SQL generation), `FRED_CATEGORIES` |
+| `dbt_project/models/` | staging (13) / intermediate (2) / marts (6) dbt models |
+| `profiles.yml` | dbt connection profile (gitignored; reads env vars) |
 | `docker-compose.yml` | Airflow Docker Compose (4 services: db, webserver, scheduler, init) |
 | `equity_analytics.bat` | App launcher for Windows |
 
 ---
 
-## Snowflake schema reference
+## Adding new FRED series
 
+`RAW.FRED_SELECTION` is the canonical source — no code changes needed:
+```sql
+-- 1. Find it in the catalog
+SELECT series_id, title, popularity FROM RAW.FRED_SERIES_CATALOG
+WHERE title ILIKE '%your term%' AND UPPER(title) NOT LIKE '%DISCONTINUED%'
+ORDER BY popularity DESC;
+
+-- 2. Add to selection
+INSERT INTO RAW.FRED_SELECTION (series_id, local_name, category, is_active)
+VALUES ('SERIES_ID', 'Descriptive name', 'Category', TRUE);
 ```
-EQUITY_ANALYTICS
-├── RAW
-│   ├── PRICES                  -- ~1,600 tickers, daily OHLCV, incremental append
-│   ├── COMPANY_INFO            -- metadata, overwrite each run
-│   ├── MACRO_INDICATORS        -- 175 FRED series, incremental append
-│   ├── FINANCIAL_STATEMENTS    -- EAV format, weekly overwrite
-│   ├── VALUATION_METRICS       -- 37 ratio fields, daily append
-│   ├── DIVIDENDS_AND_SPLITS    -- full history, weekly overwrite
-│   ├── EARNINGS_HISTORY        -- EPS actuals vs. estimates, weekly overwrite
-│   ├── ANALYST_RECOMMENDATIONS -- upgrade/downgrade history, weekly overwrite
-│   ├── ANALYST_PRICE_TARGETS   -- consensus snapshot, weekly append
-│   ├── FRED_RELEASES           -- FRED publication metadata, monthly overwrite
-│   ├── FRED_SERIES_CATALOG     -- all FRED series metadata (~50-150K rows), monthly overwrite
-│   └── VW_FRED_HYGIENE         -- view: latest/prev obs date + row count per series (duplicate detector)
-├── STAGING (views)             -- stg_prices, stg_companies, stg_macro_indicators, stg_financial_statements, stg_valuation_metrics
-├── INTERMEDIATE (views)        -- int_daily_returns, int_fundamentals_pivoted
-└── MARTS (tables)              -- dim_date, dim_security, fact_daily_prices, fact_macro_readings, fact_fundamentals, fact_valuation_snapshot
+```bash
+# 3. Backfill full history for new series only
+docker compose exec airflow-webserver airflow dags trigger fred_new_series_backfill
+
+# 4. Full-refresh the mart
+dbt build --profiles-dir .. --select fact_macro_readings --full-refresh
 ```
-
-Key Snowflake quirk: DATE columns in RAW are stored as nanosecond Unix epoch (NUMBER(38,0)).
-Convert with: `TO_DATE(DATEADD(second, date / 1000000000, '1970-01-01'))`
-
----
-
-## DAGs
-
-| DAG | Schedule | Description |
-|---|---|---|
-| `equity_daily` | `0 4 * * 2-6` (11pm ET Mon-Fri) | Prices + company info (incremental) |
-| `macro_daily` | `0 4 * * 2-6` (11pm ET Mon-Fri) | 175 FRED series (incremental append, 7-day overlap) |
-| `valuation_daily` | `0 4 * * 2-6` (11pm ET Mon-Fri) | Valuation snapshot (daily append) |
-| `fundamentals_weekly` | `0 4 * * 0` (11pm ET Saturday) | Financial statements (full overwrite) |
-| `equity_supplemental_weekly` | `0 4 * * 0` (11pm ET Saturday) | Dividends, earnings, analyst data |
-| `fred_catalog_refresh` | `0 4 2 * *` (11pm ET, 1st of month) | FRED metadata catalog (monthly overwrite) |
-| `backfill_prices` | None (manual) | Historical OHLCV back to 2010 |
-| `backfill_new_tickers` | None (manual) | Backfill ONLY tickers not yet in RAW.PRICES |
-| `macro_backfill` | None (manual, **paused**) | Full FRED history, all series — full overwrite |
-| `fred_new_series_backfill` | None (manual) | Full FRED history, NEW series only — append |
-
-`macro_daily` automatically picks up any series added to `FRED_SERIES` — no DAG changes needed.
 
 ---
 
 ## Common pitfalls
 
 - **dbt without env vars** — will error `Env var required but not provided: 'SNOWFLAKE_ACCOUNT'`. Always load `.env` first.
-- **`macro_backfill` vs `fred_new_series_backfill`** — `macro_backfill` overwrites everything. Always prefer `fred_new_series_backfill` when adding new series. `macro_backfill` is paused intentionally.
+- **`SNOWFLAKE_PRIVATE_KEY_PATH` for dbt** — must be absolute path when running from `dbt_project/`. Use `export SNOWFLAKE_PRIVATE_KEY_PATH="$(pwd)/snowflake_private_key.pem"` from repo root before cd-ing in.
+- **`macro_backfill` vs `fred_new_series_backfill`** — `macro_backfill` overwrites ALL series history. Always prefer `fred_new_series_backfill` for new series. `macro_backfill` is paused intentionally.
 - **`get_connection()` not `get_snowflake_connection()`** — the function in `ingestion/load.py` is `get_connection()`.
 - **dbt in Docker** — dbt is not installed in Airflow containers. Run locally.
-- **`docker compose restart` vs `docker compose up -d`** — `restart` does NOT reload env vars from `docker-compose.yml`. Always use `up -d` after env var changes.
-- **FRED catalog + backfill simultaneously** — both hit FRED API and cause 429 bursts. Run them separately.
-- **`order_by` for FRED `/releases`** — `popularity` is invalid; use `release_id`. Only `/release/series` accepts `popularity`.
-- **ETFs in financial statements** — `extract_fundamentals.py` filters out ETFs using `get_etf_tickers()`. Don't remove this filter.
-- **yfinance `'Infinity'` string** — PE ratios for negative-earnings tickers return the string `'Infinity'`. The load code coerces through `float()` + `math.isfinite()`. Keep this guard.
-- **Adding new series: update both files** — `extract_fred.py` (FRED_SERIES dict) AND `agents/prompts.py` (FRED_CATEGORIES). The prompts file provides category context to Claude for SQL generation.
+- **`docker compose restart` vs `docker compose up -d`** — `restart` does NOT reload env vars. Always use `up -d` after env var changes.
+- **FRED catalog + backfill simultaneously** — both hit FRED API causing 429 bursts. Run separately.
+- **`order_by` for FRED `/releases`** — `popularity` is invalid for `/releases`; use `release_id`. Only `/release/series` accepts `popularity`.
+- **ETFs in financial statements** — `extract_fundamentals.py` filters out ETFs. Don't remove this filter.
+- **yfinance `'Infinity'` string** — PE ratios for negative-earnings tickers return the string `'Infinity'`. Load code coerces via `float()` + `math.isfinite()`. Keep this guard.
+- **Wikipedia table scanning** — Wikipedia pages have many tables before the constituent list. `_fetch_wikipedia_table()` scans all tables for a matching ticker column name; never hardcode `tables[0]`.
+- **Nikkei 225 source** — Wikipedia has no constituent table with TSE codes. Uses JPX official page (`indexes.nikkei.co.jp`) with ~34 sector tables. `_fetch_url_tables()` handles multi-table format.
+- **DAX 40 exchange suffixes** — Wikipedia provides correct per-ticker suffixes (Airbus = `AIR.PA`, not `AIR.DE`). Use tickers as-is; only append `.DE` if no dot present.
+- **Adding new tickers always needs `--full-refresh`** — incremental fact tables miss historical rows for brand-new tickers.
 
 ---
 
 ## Security model
 
-- **Snowflake auth:** RSA key-pair (`snowflake_private_key.pem`, gitignored). Never expires. Both `app/db/snowflake.py` and `ingestion/load.py` use `_load_private_key()` which supports:
-  - Local: `SNOWFLAKE_PRIVATE_KEY_PATH` env var → reads `.pem` file
-  - Community Cloud: `SNOWFLAKE_PRIVATE_KEY` env var → PEM string in `st.secrets`
-- **SQL injection:** `get_max_date()` / `get_min_date()` use `_validate_table_name()` whitelist. Never f-string table names directly.
+- **Snowflake auth:** RSA key-pair (`snowflake_private_key.pem`, gitignored). Never expires. Both `app/db/snowflake.py` and `ingestion/load.py` use `_load_private_key()`:
+  - Local: `SNOWFLAKE_PRIVATE_KEY_PATH` → reads `.pem` file
+  - Community Cloud: `SNOWFLAKE_PRIVATE_KEY` → PEM string in `st.secrets`
+- **SQL injection:** `get_max_date()` / `get_min_date()` / `get_loaded_tickers()` use `_validate_table_name()` whitelist. Never f-string table names.
 - **DB Health tab:** gated by `HEALTH_TAB_ENABLED` env var. Docker/Airflow subprocess calls only run when `IS_LOCAL=true`. Password-protectable via `HEALTH_CHECK_PASSWORD`.
 - **App:** currently local only. Designed for Streamlit Community Cloud — no hardcoded credentials, all secrets via env vars / `st.secrets`.
 - **gitignore:** `*.pem`, `*.p8`, `profiles.yml`, `.env`, `airflow/logs/**` — never commit these.
 
 ---
 
+## Airflow REST API auth reference
+
+Base URL: `http://localhost:8080/api/v1`. Credentials: `admin:admin`.
+
+Three things must ALL be true:
+1. `AIRFLOW__API__AUTH_BACKENDS` includes `basic_auth` — set in `docker-compose.yml`. Only takes effect after `docker compose up -d`, NOT `docker compose restart`.
+2. Admin user exists in Airflow metadata DB.
+3. Admin role has correct FAB permissions.
+
+Quick test:
+```powershell
+$h = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("admin:admin")) }
+Invoke-RestMethod "http://localhost:8080/api/v1/dags" -Headers $h | Select-Object total_entries
+```
+
+| Symptom | Fix |
+|---|---|
+| 403 on all endpoints | `docker compose up -d airflow-webserver` (recreate, not restart) |
+| 403 after basic_auth confirmed | `docker compose exec airflow-webserver airflow sync-perm` |
+| "No data found" from users list | Re-create admin user manually |
+
+---
+
+## Known issues / next steps
+
+1. **db_health_check.py thresholds** — `EXPECTED_TICKERS=1500` is stale; update to ~11,000 now that backfill is complete
+2. **equity_daily / valuation_daily scale** — 12,524 tickers at 2s/ticker (~7h) exceeds 2h task timeout; options: reduce delay, batch-parallel tasks, or incremental skip-already-updated logic
+3. **Phase 5 — Fundamentals cohort rotation** — update `fundamentals_weekly` to use `WEEKOFYEAR(CURRENT_DATE()) % 4` filter; change load to per-cohort scoped DELETE + INSERT; run `fact_fundamentals --full-refresh` after first 4-week cycle
+4. **GitHub branch protection** — add rule on `main`: require PRs, status checks, include administrators
+5. **chart_agent.py system prompt** — add supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) to Claude system prompt for SQL generation
+6. **dbt models for supplemental tables** — staging + mart models for all four supplemental RAW tables
+7. **Historical valuation ratios dbt model** — compute trailing PE/P/B/P/S/yield/beta from `fact_daily_prices` × `fact_fundamentals` join using point-in-time statement dates (avoids look-ahead bias)
+8. **FRED catalog retry hardening** — exponential backoff needed; current 15s single retry insufficient for sustained 429 bursts
+
+---
+
 ## Git workflow
 
 Branch off `main`, open PR, CI runs dbt tests + AI code review.
-Current active branch: `fred-series-expansion` (pushed, PR not yet open).
 
-```powershell
+```bash
 git checkout -b feature/my-feature main
 git push origin feature/my-feature
 gh pr create --title "..." --body "..."

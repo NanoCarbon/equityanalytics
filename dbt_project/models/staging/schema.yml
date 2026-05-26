@@ -120,6 +120,16 @@ models:
       - name: snapshot_date
         tests:
           - not_null
+      - name: trailing_pe
+        description: "Trailing PE ratio. PE > 1000 is almost certainly a data extraction error."
+      - name: forward_pe
+        description: "Forward PE ratio. PE > 1000 is almost certainly a data extraction error."
+      - name: gross_margin
+        description: "Gross margin as decimal. yfinance returns decimals (0.45 = 45%). Values outside [-1, 1] indicate extraction errors."
+      - name: operating_margin
+        description: "Operating margin as decimal. Values outside [-1, 1] indicate extraction errors."
+      - name: profit_margin
+        description: "Net profit margin as decimal. Values outside [-1, 1] indicate extraction errors."
 
   # ── Supplemental equity data ──────────────────────────────────────────────────
 

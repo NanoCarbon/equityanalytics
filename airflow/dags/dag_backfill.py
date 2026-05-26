@@ -44,7 +44,7 @@ DEFAULT_ARGS = {
 )
 def backfill_prices():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
         """Load active tickers from RAW.TICKER_UNIVERSE; falls back to Wikipedia scrape."""
         from ingestion.extract import get_tickers_from_db
@@ -57,7 +57,7 @@ def backfill_prices():
         logger.info("Loaded %d tickers for backfill", len(all_tickers))
         return all_tickers
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_backfill_boundaries() -> dict:
         """
         Determine the date range to backfill.
@@ -83,7 +83,7 @@ def backfill_prices():
 
         return {"start_date": start_date, "end_date": end_date, "skip": False}
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def run_backfill(tickers: list, boundaries: dict) -> dict:
         """
         Download historical prices in batches of 50 tickers with 30s delays

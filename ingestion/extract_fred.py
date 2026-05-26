@@ -14,6 +14,9 @@ HTTP_TIMEOUT = 30
 class _RateLimitError(Exception):
     """Raised when FRED API returns HTTP 429 — signals the caller to back off."""
 
+class _TransientError(Exception):
+    """Raised on 5xx responses — transient server errors that warrant a retry with backoff."""
+
 
 _DELAY_BASE     = 0.5   # seconds between series requests
 _DELAY_MAX      = 30.0  # cap on backed-off delay
@@ -441,7 +444,23 @@ def extract_fred_series(
             logger.warning("Skipping %s — premium series, free key not authorized (403)", series_id)
             return pd.DataFrame()
 
-        response.raise_for_status()
+        # Handle remaining non-2xx responses without logging the URL (which
+        # contains the api_key query param).
+        # 5xx = transient server error → raise for retry with backoff (same as 429).
+        # 4xx (other than 400/403 above) = permanent client error → skip series.
+        if not response.ok:
+            if response.status_code >= 500:
+                logger.warning(
+                    "FRED transient HTTP %d for %s — will retry with backoff",
+                    response.status_code, series_id,
+                )
+                raise _TransientError(series_id)
+            else:
+                logger.warning(
+                    "FRED HTTP %d for %s — skipping (permanent client error)",
+                    response.status_code, series_id,
+                )
+                return pd.DataFrame()
 
         observations = response.json().get("observations", [])
         if not observations:
@@ -495,7 +514,7 @@ def extract_all_fred_series(
     for i, (series_id, series_name) in enumerate(active_series.items(), 1):
         logger.info("Fetching %s (%d/%d)... (delay=%.2fs)", series_id, i, total, delay)
 
-        while True:  # retry loop: only retries on 429
+        while True:  # retry loop: retries on 429 (rate limit) and 5xx (transient)
             try:
                 result = extract_fred_series(
                     api_key, series_id, start_date, lookback_days, series_name
@@ -503,7 +522,11 @@ def extract_all_fred_series(
                 break
             except _RateLimitError:
                 delay = min(delay * _BACKOFF_FACTOR, _DELAY_MAX)
-                logger.warning("Rate limited — sleeping %.1fs before retry", delay)
+                logger.warning("Rate limited (429) — sleeping %.1fs before retry", delay)
+                time.sleep(delay)
+            except _TransientError:
+                delay = min(delay * _BACKOFF_FACTOR, _DELAY_MAX)
+                logger.warning("Transient server error (5xx) — sleeping %.1fs before retry", delay)
                 time.sleep(delay)
 
         if result is None:

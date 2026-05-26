@@ -1,6 +1,6 @@
 # Equity Analytics Pipeline
 
-A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests ~11,900 US-listed equities and ETFs (full S&P Composite 1500 + all NASDAQ/NYSE/ARCA/BATS exchange-listed securities via NASDAQ Trader flat files), 6,100+ Federal Reserve macro indicators (catalog-driven, fully expanded), complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog — models them into a Kimball dimensional warehouse, and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
+A production-style ELT pipeline and AI-powered analytics application built as a portfolio project for data engineering roles in financial services. Ingests **12,500+ global securities** — full S&P Composite 1500, all US exchange-listed equities and ETFs via NASDAQ Trader flat files, and 5 international indices (FTSE 100, TSX 60, ASX 200, Nikkei 225, DAX 40) — plus 6,100+ Federal Reserve macro indicators, complete fundamental financial data (income statements, balance sheets, cash flow, and valuation metrics), supplemental equity data (dividends, earnings history, analyst ratings, price targets), and a full FRED series catalog. Models everything into a Kimball dimensional warehouse and exposes the data through a natural language chat interface that generates SQL and interactive charts on demand.
 
 ## Live Demo
 
@@ -11,15 +11,16 @@ A production-style ELT pipeline and AI-powered analytics application built as a 
 ## Architecture
 
 ```
-S&P 1500 + ETF prices         FRED macro indicators       Financial statements
-     (yfinance)                    (FRED API)               + valuation metrics
+12,500+ global securities      FRED macro indicators       Financial statements
+ (yfinance + exchange pages)       (FRED API)               + valuation metrics
           |                             |                       (yfinance)
   Python ingestion            Python ingestion             Python ingestion
   Airflow orchestrated        Airflow orchestrated         Airflow orchestrated
+  (Docker Compose)
           |                             |                            |
        Snowflake RAW schema (append-only / overwrite landing zone)
                         |
-            dbt transformations
+            dbt transformations (Docker-local)
        staging -> intermediate -> marts
                         |
           Snowflake MARTS schema
@@ -49,20 +50,22 @@ S&P 1500 + ETF prices         FRED macro indicators       Financial statements
 ## Data Coverage
 
 ### Equities
-- **~11,899 tickers** — full S&P Composite 1500 (S&P 500 + S&P 400 mid-cap + S&P 600 small-cap) + all US exchange-listed equities and ETFs via NASDAQ Trader flat files (NASDAQ, NYSE, NYSE Arca, NYSE American, BATS, IEX)
-- S&P index membership is fetched live from Wikipedia on each DAG run — rebalances are picked up automatically
-- NASDAQ Trader files (`nasdaqlisted.txt` + `otherlisted.txt`) are synced nightly — new listings added, delistings soft-deactivated
-- Daily OHLCV prices with incremental loads — only new trading days extracted each run
-- Company metadata: sector, industry, market cap, exchange
+- **12,524 tickers** — full S&P Composite 1500 + all US exchange-listed equities and ETFs via NASDAQ Trader flat files + 5 international indices (FTSE 100 `.L`, TSX 60 `.TO`, ASX 200 `.AX`, Nikkei 225 `.T`, DAX 40 `.DE`)
+- **7,293 equities** (fundamentals eligible) + **5,231 ETFs/funds**
+- S&P index membership fetched live from Wikipedia on each nightly sync — rebalances picked up automatically
+- NASDAQ Trader files synced nightly — new listings inserted, delistings soft-deactivated
+- International indices synced Monday ET only (quarterly rebalance cadence)
+- **25M+ daily OHLCV price rows** — 2010 to present, incremental append
+- Company metadata: sector, industry, market cap, exchange, country
 - **Rotating fundamentals cohort** — `fundamentals_cohort` (0–3) assigned deterministically per ticker (`ABS(HASH(ticker)) % 4`); drives the 4-week rolling fundamentals schedule; NULL for ETFs
 
 ### Fundamentals
-- **Financial statements** — income statement, balance sheet, cash flow for ~6,668 common equities (ETFs excluded)
+- **Financial statements** — income statement, balance sheet, cash flow for ~7,293 equities (ETFs excluded)
   - ~4 years annual + ~8 quarters per ticker from yfinance
   - EAV format in RAW/staging, pivoted to ~35 named columns in marts
-  - Cohort-rotation strategy: each week processes one cohort (~1,650 tickers) — full 4-week cycle covers all equities; ≤30-day staleness tolerance
+  - Cohort-rotation strategy: each week processes one cohort (~1,800 tickers) — full 4-week cycle covers all equities; ≤30-day staleness tolerance
 - **Valuation metrics** — 37 point-in-time fields per ticker per day (PE, P/B, EV/EBITDA, margins, growth rates, dividends, beta, etc.)
-  - All ~11,899 tickers including ETFs
+  - All 12,524 tickers including ETFs
   - Daily append builds a time series of how ratios evolve
 - **Dividends and splits** — full corporate action history back to IPO for all tickers (weekly overwrite)
 - **Earnings history** — EPS actuals vs. analyst estimates, ~8–20 quarters per equity ticker (weekly overwrite)
@@ -128,8 +131,8 @@ EQUITY_ANALYTICS
 │   │                              columns: ticker, source (sp500/sp400/sp600/etf/nasdaq_trader/manual),
 │   │                              is_active, is_equity, exchange, country, yfinance_suffix,
 │   │                              fundamentals_cohort (0–3, NULL for ETFs), added_at, deactivated_at
-│   ├── PRICES                  -- daily OHLCV, ~1,600 tickers, incremental append
-│   ├── COMPANY_INFO            -- company metadata, overwrite on each run
+│   ├── PRICES                  -- daily OHLCV, 12,524 tickers, ~25M+ rows (2010–present), incremental append
+│   ├── COMPANY_INFO            -- company metadata, 12,524 tickers, overwrite on each run
 │   ├── MACRO_INDICATORS        -- 788+ FRED series, incremental append
 │   ├── FINANCIAL_STATEMENTS    -- EAV format (income/balance/cashflow), weekly overwrite
 │   ├── VALUATION_METRICS       -- point-in-time ratios, daily append
@@ -204,11 +207,12 @@ Pipelines run on **Apache Airflow 2.9.3** deployed via Docker Compose locally on
   - Analyst price targets: weekly consensus snapshot append → `RAW.ANALYST_PRICE_TARGETS`
 
 **`ticker_universe_sync`** — schedule `0 8 * * 2-6` (3am ET Mon–Fri, one hour before equity_daily)
-- Two chained tasks: `sync_sp_indices()` then `sync_nasdaq_trader()`
-- `sync_sp_indices`: scrapes S&P 500/400/600 from Wikipedia; MERGEs into `RAW.TICKER_UNIVERSE`; deactivation scoped to S&P/ETF sources only (never touches nasdaq_trader tickers)
-- `sync_nasdaq_trader`: downloads NASDAQ Trader flat files; inserts new US-listed tickers, reactivates returning tickers, deactivates delisted tickers; backfills `exchange` for existing S&P tickers where NULL
-- S&P/ETF source priority preserved on every MERGE — NASDAQ Trader never overwrites an S&P label
-- All downstream yfinance DAGs read from this table at runtime — no Wikipedia calls in the critical path
+- Three chained tasks: `sync_sp_indices()` → `sync_nasdaq_trader()` → `sync_international_indices()` (Monday ET only)
+- `sync_sp_indices`: scrapes S&P 500/400/600 from Wikipedia; MERGEs into `RAW.TICKER_UNIVERSE`; deactivation scoped to S&P/ETF sources only
+- `sync_nasdaq_trader`: downloads NASDAQ Trader flat files; inserts new US-listed tickers, reactivates returning tickers, deactivates delisted tickers
+- `sync_international_indices`: re-scrapes FTSE 100, TSX 60, ASX 200 (Wikipedia), Nikkei 225 (JPX official), DAX 40 (Wikipedia); Monday ET only — index membership only changes at quarterly rebalances
+- S&P/ETF source priority preserved on every MERGE — nasdaq_trader and international sources never overwrite an S&P label
+- All downstream yfinance DAGs read from `TICKER_UNIVERSE` at runtime — no Wikipedia calls in the critical path
 
 **`fred_catalog_refresh`** — schedule `0 4 2 * *` (11pm ET on the 1st of each month)
 - Crawls all ~300 FRED statistical releases
@@ -408,7 +412,7 @@ A GitHub Actions workflow calls the Claude API with all modified files and posts
 equityanalytics/
 ├── ingestion/
 │   ├── extract.py                    # yfinance extraction -- S&P 1500 scrapers, bulk price download
-│   ├── extract_ticker_universe.py    # Ticker universe sources -- fetch_nasdaq_trader_us(); Phase 3 stubs
+│   ├── extract_ticker_universe.py    # Ticker universe sources -- fetch_nasdaq_trader_us(); fetch_ftse100/tsx60/asx200/nikkei225/dax40
 │   ├── extract_fred.py               # FRED API extraction -- 108 series with rate limiting
 │   ├── extract_fred_catalog.py       # FRED releases + series catalog crawler
 │   ├── extract_fundamentals.py       # Financial statements (EAV) + valuation metrics
@@ -453,6 +457,7 @@ equityanalytics/
 │       ├── log_viewer.py             # Airflow log filesystem reader
 │       └── data_quality.py           # Health check results table
 ├── scripts/
+│   ├── backfill.py                   # Parameterized backfill CLI -- idempotent, all 4 data types, rate-limit tunable
 │   ├── db_health_check.py            # Reusable DB health check -- run anytime to confirm data quality
 │   └── create_fred_hygiene_view.py   # One-shot: creates VW_FRED_HYGIENE in Snowflake RAW schema
 ├── app/
@@ -467,13 +472,12 @@ equityanalytics/
 │       └── code_review.yml       # AI code review comment on every PR
 ├── equity_analytics.bat          # App launcher (docker up + Airflow health wait + db_health_check + Streamlit)
 ├── pin_to_start_menu.ps1         # Creates a Start Menu shortcut for equity_analytics.bat
-├── CLAUDE.md                     # Claude Code project guide (architecture, patterns, pitfalls)
+├── CLAUDE.md                     # Claude Code project guide (architecture, patterns, pitfalls, current state)
 ├── docker-compose.yml            # Airflow services (webserver, scheduler, init, postgres)
 ├── dbt_project.yml               # dbt project config
 ├── profiles.yml                  # dbt Core connection profile (gitignored)
 ├── requirements.txt
-├── .env.example
-└── CONTEXT.md                    # Project state reference
+└── .env.example
 ```
 
 ---
@@ -688,15 +692,20 @@ dbt build --profiles-dir . --select +fact_fundamentals --full-refresh
 
 | Category | Source | Count |
 |---|---|---|
-| S&P 500 (large-cap) | Wikipedia (live) | ~503 |
-| S&P 400 (mid-cap) | Wikipedia (live) | ~400 |
-| S&P 600 (small-cap) | Wikipedia (live) | ~603 |
+| S&P 500 (large-cap) | Wikipedia (live, nightly sync) | ~503 |
+| S&P 400 (mid-cap) | Wikipedia (live, nightly sync) | ~400 |
+| S&P 600 (small-cap) | Wikipedia (live, nightly sync) | ~603 |
 | ETFs (top 100+ by AUM) | Hardcoded list | ~113 |
 | NASDAQ-listed equities & ETFs | NASDAQ Trader `nasdaqlisted.txt` | ~5,086 |
 | NYSE / NYSE Arca / AMEX / BATS equities & ETFs | NASDAQ Trader `otherlisted.txt` | ~5,194 |
-| **Total unique US-listed** | | **~11,899** |
+| FTSE 100 | Wikipedia (Monday sync) | 100 |
+| TSX 60 | Wikipedia (Monday sync) | 60 |
+| ASX 200 | Wikipedia (Monday sync) | 200 |
+| Nikkei 225 | JPX official page (Monday sync) | 225 |
+| DAX 40 | Wikipedia (Monday sync) | 40 |
+| **Total unique global** | | **~12,524** |
 
-Of the 11,899 active tickers: **6,668 equities** (fundamentals eligible) and **5,231 ETFs/funds**. S&P index membership is fetched live from Wikipedia on each nightly sync — rebalances are picked up automatically. NASDAQ Trader files are also synced nightly — new listings are inserted, delistings are soft-deactivated.
+Of the 12,524 active tickers: **7,293 equities** (fundamentals eligible) and **5,231 ETFs/funds**. All tickers have price history back to 2010-01-01. S&P and NASDAQ Trader tickers sync nightly; international indices sync Monday ET only (quarterly rebalance cadence).
 
 ---
 
@@ -726,8 +735,8 @@ Of the 11,899 active tickers: **6,668 equities** (fundamentals eligible) and **5
 ## Roadmap
 
 ### Near-term (pipeline)
-- **Phase 3 — International indices** — implement `fetch_ftse100()`, `fetch_tsx60()`, `fetch_asx200()`, `fetch_nikkei225()`, `fetch_dax40()` in `extract_ticker_universe.py` (stubs exist); add ~625 tickers with correct yfinance suffixes (`.L`, `.TO`, `.AX`, `.T`, `.DE`); Monday-only sync in `ticker_universe_sync`
-- **Phase 4 — Price ingestion at scale** — benchmark and tune `equity_daily` batch parameters; split into parallel US + international tasks; backfill ~10,280 new NASDAQ Trader tickers
+- ✅ **Phase 3 — International indices** — FTSE 100, TSX 60, ASX 200, Nikkei 225, DAX 40 live in `TICKER_UNIVERSE`; Monday-only sync in `ticker_universe_sync`
+- ✅ **Phase 4 — Global backfill** — all 12,524 tickers backfilled from 2010-01-01 (prices, company info, financials, valuation); `dbt --full-refresh` complete across all fact tables
 - **Phase 5 — Fundamentals at scale** — update `fundamentals_weekly` to use `fundamentals_cohort` rotation (`WEEKOFYEAR(CURRENT_DATE()) % 4`); change load strategy from full-table overwrite to per-cohort scoped DELETE + INSERT
 - **Historical valuation ratios** — dbt model computing trailing PE, P/B, P/S, dividend yield, and beta from existing `fact_daily_prices` x `fact_fundamentals` join, using point-in-time financial statement dates to avoid look-ahead bias. Extends ratio history back to 2010 without any new data sources.
 - **dbt models for supplemental tables** — staging and mart models for `DIVIDENDS_AND_SPLITS`, `EARNINGS_HISTORY`, `ANALYST_RECOMMENDATIONS`, and `ANALYST_PRICE_TARGETS`.

@@ -103,3 +103,13 @@ models:
       - name: snapshot_date
         tests:
           - not_null
+      - name: trailing_pe
+        description: "Trailing 12-month price-to-earnings ratio."
+      - name: forward_pe
+        description: "Forward price-to-earnings ratio based on analyst estimates."
+      - name: gross_margin
+        description: "Gross margin stored as decimal (0.45 = 45%). Values >1 or <-1 indicate extraction errors."
+      - name: operating_margin
+        description: "Operating margin stored as decimal."
+      - name: profit_margin
+        description: "Net profit margin stored as decimal."

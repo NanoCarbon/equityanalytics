@@ -165,7 +165,52 @@ def seed_nasdaq_trader(cur) -> None:
     logger.info("NASDAQ Trader seed complete (%d rows processed)", len(rows))
 
 
-# ── Step 3: Assign fundamentals_cohort ────────────────────────────────────────
+# ── Step 3: International indices seed ───────────────────────────────────────
+
+def seed_international_indices(cur) -> None:
+    """
+    Fetch FTSE 100, TSX 60, ASX 200, Nikkei 225, and DAX 40 constituents from
+    Wikipedia and MERGE into RAW.TICKER_UNIVERSE.
+
+    Each index is attempted independently — if one Wikipedia page is down or
+    returns unexpected HTML, it is logged and skipped rather than aborting the
+    entire seed run.  Existing US tickers sharing a base symbol are never
+    touched because international tickers carry a suffix (e.g. .L, .TO).
+    """
+    from ingestion.extract_ticker_universe import (
+        fetch_ftse100, fetch_tsx60, fetch_asx200,
+        fetch_nikkei225, fetch_dax40,
+    )
+
+    fetchers = [
+        ('FTSE 100',   fetch_ftse100),
+        ('TSX 60',     fetch_tsx60),
+        ('ASX 200',    fetch_asx200),
+        ('Nikkei 225', fetch_nikkei225),
+        ('DAX 40',     fetch_dax40),
+    ]
+
+    total_merged = 0
+    for index_name, fetcher in fetchers:
+        try:
+            rows = fetcher()
+            if not rows:
+                logger.warning("%s: fetcher returned 0 rows — skipping", index_name)
+                continue
+            logger.info("%s: merging %d constituents...", index_name, len(rows))
+            _merge_rows(cur, rows)
+            total_merged += len(rows)
+            logger.info("%s: MERGE complete", index_name)
+        except Exception as exc:
+            logger.error(
+                "%s: fetch/merge failed — skipping index (%s: %s)",
+                index_name, type(exc).__name__, exc,
+            )
+
+    logger.info("International indices seed complete (%d total rows processed)", total_merged)
+
+
+# ── Step 4: Assign fundamentals_cohort ────────────────────────────────────────
 
 def assign_fundamentals_cohort(cur) -> None:
     """
@@ -197,7 +242,10 @@ def seed_ticker_universe() -> None:
         logger.info("\n=== Step 2: NASDAQ Trader seed ===")
         seed_nasdaq_trader(cur)
 
-        logger.info("\n=== Step 3: Assign fundamentals cohorts ===")
+        logger.info("\n=== Step 3: International indices seed ===")
+        seed_international_indices(cur)
+
+        logger.info("\n=== Step 4: Assign fundamentals cohorts ===")
         assign_fundamentals_cohort(cur)
 
         # Final summary

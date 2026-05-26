@@ -2,24 +2,27 @@
 DAG: ticker_universe_sync
 Schedule: 3am ET Mon-Fri (08:00 UTC) — runs before equity_daily (4am ET)
 
-Keeps RAW.TICKER_UNIVERSE in sync with the live S&P 1500 index membership
-and the hardcoded ETF list.
+Keeps RAW.TICKER_UNIVERSE in sync with all configured ticker sources.
 
-What it does:
-  1. Scrapes the current S&P 500, 400, and 600 components from Wikipedia
-  2. MERGEs the result into RAW.TICKER_UNIVERSE:
-       - New tickers are INSERT with is_active=TRUE
-       - Existing tickers have source/is_equity refreshed, is_active set TRUE
-       - Tickers that dropped from ALL indices and the ETF list are marked
-         is_active=FALSE with a deactivation_reason
-  3. Logs a summary: added, reactivated, deactivated
+Task chain (runs daily, Mon-Fri ET):
+  1. sync_sp_indices      — Scrape S&P 500/400/600 + ETF list from Wikipedia;
+                            MERGE into TICKER_UNIVERSE; deactivate tickers that
+                            dropped from all S&P indices and the ETF list.
+  2. sync_nasdaq_trader   — Download NASDAQ Trader flat files; INSERT new
+                            US-listed tickers; reactivate deactivated tickers
+                            still present on exchanges; deactivate delisted ones.
+  3. sync_international_indices (Monday ET only) — Re-scrape Wikipedia for
+                            FTSE 100, TSX 60, ASX 200, Nikkei 225, and DAX 40;
+                            MERGE constituents.  Skips on Tue-Fri ET runs since
+                            index membership changes only at quarterly rebalances.
 
-By running one hour before equity_daily, the downstream DAGs always read a
-fresh, reconciled ticker list from TICKER_UNIVERSE rather than calling
-Wikipedia themselves.
+Source priority rule:
+  S&P/ETF membership always wins (source label never downgraded by NASDAQ or
+  international sync).  nasdaq_trader and international sources manage their
+  own deactivation independently.
 
-Deactivated tickers are never deleted — they remain in the table with
-is_active=FALSE so historical RAW data retains a valid FK reference.
+Deactivated tickers are never deleted — they remain with is_active=FALSE so
+historical RAW data retains a valid FK reference.
 """
 
 import sys
@@ -50,7 +53,7 @@ DEFAULT_ARGS = {
 )
 def ticker_universe_sync():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def sync_sp_indices() -> dict:
         """
         Scrape current S&P 1500 + ETF list and reconcile ONLY those source rows
@@ -218,7 +221,7 @@ def ticker_universe_sync():
         )
         return result
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def sync_nasdaq_trader(sp_result: dict) -> dict:
         """
         Download the NASDAQ Trader flat files and reconcile against
@@ -415,8 +418,96 @@ def ticker_universe_sync():
         )
         return result
 
-    sp_result = sync_sp_indices()
-    sync_nasdaq_trader(sp_result)   # runs after S&P sync; receives its result via XCom
+    @task(execution_timeout=timedelta(hours=2))
+    def sync_international_indices(nasdaq_result: dict, **context) -> dict:
+        """
+        Re-scrape Wikipedia for all 5 international indices (FTSE 100, TSX 60,
+        ASX 200, Nikkei 225, DAX 40) and MERGE into RAW.TICKER_UNIVERSE.
+
+        Runs only on Monday ET (= Tuesday UTC for a DAG scheduled at 08:00 UTC).
+        International constituents change only at quarterly rebalances so a
+        once-per-week refresh is more than sufficient.
+
+        Each index is attempted independently — a failed Wikipedia scrape for
+        one index is logged and skipped without aborting the others.
+
+        Source priority is respected: if a ticker somehow appears in both an
+        international index and a US source, the US source is preserved via
+        the standard MERGE logic in _merge_rows.
+        """
+        logical_date = context['logical_date']
+        # DAG schedule: 08:00 UTC Tue-Sat = 03:00 ET Mon-Fri.
+        # Tuesday UTC (weekday=1) corresponds to Monday ET — run only then.
+        if logical_date.weekday() != 1:
+            logger.info(
+                "International index sync skipped — only runs on Monday ET "
+                "(logical_date weekday=%d, need 1=Tuesday UTC)",
+                logical_date.weekday(),
+            )
+            return {"skipped": True}
+
+        from ingestion.extract_ticker_universe import (
+            fetch_ftse100, fetch_tsx60, fetch_asx200,
+            fetch_nikkei225, fetch_dax40,
+        )
+        from ingestion.seed_ticker_universe import _merge_rows
+        from ingestion.load import get_connection
+
+        fetchers = [
+            ('FTSE 100',   fetch_ftse100),
+            ('TSX 60',     fetch_tsx60),
+            ('ASX 200',    fetch_asx200),
+            ('Nikkei 225', fetch_nikkei225),
+            ('DAX 40',     fetch_dax40),
+        ]
+
+        conn = get_connection()
+        total_merged   = 0
+        skipped_indices: list[str] = []
+        try:
+            cur = conn.cursor()
+
+            for index_name, fetcher in fetchers:
+                try:
+                    rows = fetcher()
+                    if not rows:
+                        logger.warning("%s: 0 rows returned — skipping", index_name)
+                        skipped_indices.append(index_name)
+                        continue
+                    logger.info("%s: merging %d constituents", index_name, len(rows))
+                    _merge_rows(cur, rows)
+                    total_merged += len(rows)
+                except Exception as exc:
+                    logger.error(
+                        "%s: fetch/merge failed (%s: %s) — skipping index",
+                        index_name, type(exc).__name__, exc,
+                    )
+                    skipped_indices.append(index_name)
+
+            # Assign fundamentals_cohort for any newly-inserted equity rows
+            cur.execute("""
+                UPDATE EQUITY_ANALYTICS.RAW.TICKER_UNIVERSE
+                SET    fundamentals_cohort = ABS(HASH(ticker))::INTEGER % 4
+                WHERE  is_equity = TRUE AND fundamentals_cohort IS NULL
+            """)
+            cur.close()
+
+        finally:
+            conn.close()
+
+        result = {
+            "merged":          total_merged,
+            "skipped_indices": skipped_indices,
+        }
+        logger.info(
+            "International index sync complete — %d rows merged; skipped: %s",
+            total_merged, skipped_indices or "none",
+        )
+        return result
+
+    sp_result     = sync_sp_indices()
+    nasdaq_result = sync_nasdaq_trader(sp_result)
+    sync_international_indices(nasdaq_result)   # Monday ET only; skips otherwise
 
 
 ticker_universe_sync()

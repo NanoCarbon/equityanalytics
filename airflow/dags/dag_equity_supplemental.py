@@ -46,7 +46,7 @@ RATE_DELAY = 0.5
 )
 def equity_supplemental_weekly():
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
         """
         Load all active tickers from RAW.TICKER_UNIVERSE (primary source).
@@ -62,7 +62,7 @@ def equity_supplemental_weekly():
         logger.info("Loaded %d tickers", len(all_tickers))
         return all_tickers
 
-    @task()
+    @task(execution_timeout=timedelta(hours=2))
     def get_equity_tickers() -> list:
         """
         Load equity-only tickers from RAW.TICKER_UNIVERSE (is_equity=TRUE).
@@ -79,7 +79,7 @@ def equity_supplemental_weekly():
         logger.info("Loaded %d equity tickers", len(equity_tickers))
         return equity_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_dividends(tickers: list) -> int:
         """
         Extract full dividend and stock split history for all tickers
@@ -103,7 +103,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.DIVIDENDS_AND_SPLITS with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_earnings(equity_tickers: list) -> int:
         """
         Extract EPS actuals vs. analyst estimates for equity tickers and
@@ -125,7 +125,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.EARNINGS_HISTORY with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_recommendations(equity_tickers: list) -> int:
         """
         Extract analyst upgrade/downgrade history and overwrite
@@ -148,7 +148,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.ANALYST_RECOMMENDATIONS with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5))
+    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_price_targets(equity_tickers: list) -> int:
         """
         Extract current analyst price target consensus (mean/high/low/count)

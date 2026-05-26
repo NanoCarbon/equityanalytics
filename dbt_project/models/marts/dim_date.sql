@@ -1,8 +1,10 @@
 {{ config(materialized='table', schema='marts') }}
 
+-- rowcount = datediff(day, '2009-01-01', '2031-12-31') + 1 = 8401
+-- Covers 2009-01-01 through 2031-12-31. Update when approaching 2032.
 with date_spine as (
     select dateadd(day, seq4(), '2009-01-01'::date) as date_day
-    from table(generator(rowcount => 7000))
+    from table(generator(rowcount => 8401))
 )
 
 select

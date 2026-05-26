@@ -136,14 +136,19 @@ def _clean_sql(sql: str) -> str:
     return sql
 
 
-def _run_query(conn, sql: str) -> pd.DataFrame:
-    """Execute SQL against an open connection and return a DataFrame."""
+def _run_query(conn, sql: str, params: tuple | None = None) -> pd.DataFrame:
+    """Execute SQL against an open connection and return a DataFrame.
+
+    params: optional tuple of bind values for %s placeholders in sql.
+            Use this for any user-supplied values to avoid SQL injection
+            rather than interpolating values directly into the query string.
+    """
     sql = _clean_sql(sql)
     _assert_read_only(sql)
     start = time.monotonic()
     cursor = conn.cursor()
     cursor.execute("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 30")
-    cursor.execute(sql)
+    cursor.execute(sql, params)
     df = cursor.fetch_pandas_all()
     df.columns = [c.lower() for c in df.columns]
     logger.info("Query %.2fs -> %d rows", time.monotonic() - start, len(df))
@@ -173,6 +178,40 @@ def execute_sql(sql: str) -> pd.DataFrame:
             fresh_conn = get_snowflake_connection()
             try:
                 return _run_query(fresh_conn, sql)
+            except Exception as retry_err:
+                logger.error("Retry after reconnect failed: %s", retry_err)
+                raise
+        logger.error("Snowflake query error: %s", e)
+        raise
+    except Exception as e:
+        logger.error("Unexpected query error: %s", e)
+        get_snowflake_connection.clear()
+        raise
+
+
+def execute_sql_params(sql: str, params: tuple) -> pd.DataFrame:
+    """Execute a parameterized query with user-supplied bind values.
+
+    Use this instead of execute_sql / execute_sql_cached whenever the query
+    contains values derived from user input (e.g. a ticker typed in a text box).
+    Values are bound via %s placeholders — never interpolated into the SQL string.
+    Not cached, since parameterized queries vary per call.
+
+    Example:
+        execute_sql_params("SELECT * FROM t WHERE ticker = %s", (ticker,))
+    """
+    conn = get_snowflake_connection()
+    try:
+        return _run_query(conn, sql, params)
+    except snowflake.connector.errors.ProgrammingError as e:
+        if e.errno in _RECONNECT_CODES:
+            logger.warning(
+                "Snowflake session stale (errno %d) — clearing cache and reconnecting", e.errno
+            )
+            get_snowflake_connection.clear()
+            fresh_conn = get_snowflake_connection()
+            try:
+                return _run_query(fresh_conn, sql, params)
             except Exception as retry_err:
                 logger.error("Retry after reconnect failed: %s", retry_err)
                 raise
