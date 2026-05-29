@@ -1,3 +1,4 @@
+import random
 import yfinance as yf
 import pandas as pd
 import time
@@ -6,6 +7,10 @@ import requests
 from datetime import datetime, timedelta, date
 from typing import List
 from io import StringIO
+
+_DELAY_MAX      = 30.0
+_BACKOFF_FACTOR = 2.0
+_RECOVER_FACTOR = 0.9
 
 logger = logging.getLogger(__name__)
 
@@ -310,31 +315,60 @@ def extract_company_info(
     delay_seconds: float = 2.0,
     batch_size: int = 100,
     batch_pause: float = 30.0,
+    long_cooldown_every: int = 500,
+    long_cooldown_seconds: float = 300.0,
 ) -> pd.DataFrame:
     """
     Extract company metadata from yfinance with rate limiting.
     Each ticker requires a separate API call so we add a delay.
     Per-ticker failures are caught and filled with nulls so the batch continues.
 
-    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
-    tickers. equity_daily and valuation_daily both fire at 11pm ET and both hit
-    the .info endpoint — without batch pauses Yahoo Finance silently throttles
-    after ~270 tickers (same failure mode seen in financial statements).
+    Rate-limiting strategy (Yahoo Finance .info endpoint):
+      - Jitter on per-ticker sleep to reduce bot-signature patterns.
+      - Dynamic backoff: delay doubles on exception, recovers gradually on success.
+      - Batch pause every 100 tickers.
+      - Long cooldown every 500 tickers to reset Yahoo's sliding rate-limit window.
+      - Thin-response detection: < 5 keys indicates a 429 or delisted ticker.
+        These are written as null rows (company metadata tolerates gaps; valuation
+        does not) but are counted and logged for observability.
     """
     records = []
     total = len(tickers)
+    empty_responses = 0
+    delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
             info = yf.Ticker(ticker).info
-            records.append({
-                "ticker": ticker,
-                "company_name": info.get("longName"),
-                "sector": info.get("sector"),
-                "industry": info.get("industry"),
-                "market_cap": info.get("marketCap"),
-                "extracted_at": datetime.utcnow()
-            })
+
+            # Thin-response detection — possible silent 429 or delisted ticker
+            if len(info) < 5:
+                empty_responses += 1
+                logger.warning(
+                    "Thin .info response for %s (%d keys) — possible 429 or delisted. "
+                    "Total thin responses: %d",
+                    ticker, len(info), empty_responses,
+                )
+                records.append({
+                    "ticker": ticker,
+                    "company_name": None,
+                    "sector": None,
+                    "industry": None,
+                    "market_cap": None,
+                    "extracted_at": datetime.utcnow(),
+                })
+                delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
+            else:
+                records.append({
+                    "ticker": ticker,
+                    "company_name": info.get("longName"),
+                    "sector": info.get("sector"),
+                    "industry": info.get("industry"),
+                    "market_cap": info.get("marketCap"),
+                    "extracted_at": datetime.utcnow(),
+                })
+                delay = max(delay_seconds * 0.5, delay * _RECOVER_FACTOR)
+
         except Exception as e:
             logger.warning("Could not fetch info for %s: %s", ticker, e)
             records.append({
@@ -343,21 +377,34 @@ def extract_company_info(
                 "sector": None,
                 "industry": None,
                 "market_cap": None,
-                "extracted_at": datetime.utcnow()
+                "extracted_at": datetime.utcnow(),
             })
+            delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         if i % 50 == 0:
             logger.info("Metadata progress: %d/%d tickers", i, total)
 
-        # Per-ticker delay
+        # Per-ticker delay with jitter
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(random.uniform(delay * 0.75, delay * 1.5))
 
-        # Batch pause every batch_size tickers to let Yahoo Finance rate limit reset
-        if i % batch_size == 0 and i < total:
+        # Long cooldown takes priority over batch pause at the 500-ticker mark
+        if i % long_cooldown_every == 0 and i < total:
+            logger.info(
+                "Long cooldown %.0fs after %d tickers (resets Yahoo sliding window)...",
+                long_cooldown_seconds, i,
+            )
+            time.sleep(long_cooldown_seconds)
+        elif i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers...", batch_pause, i)
             time.sleep(batch_pause)
 
+    if empty_responses:
+        logger.warning(
+            "%d thin/empty .info responses detected — if high (>1%% of tickers) "
+            "consider increasing delay_seconds or long_cooldown_seconds.",
+            empty_responses,
+        )
     logger.info("Extracted metadata for %d tickers", len(records))
     return pd.DataFrame(records)
 
@@ -396,7 +443,7 @@ def extract_dividends_and_splits(
         if i % 100 == 0:
             logger.info("Dividends/splits progress: %d/%d", i, total)
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(random.uniform(delay_seconds * 0.75, delay_seconds * 1.5))
         if i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers (dividends)...", batch_pause, i)
             time.sleep(batch_pause)
@@ -441,7 +488,7 @@ def extract_earnings_history(
         if i % 100 == 0:
             logger.info("Earnings history progress: %d/%d", i, total)
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(random.uniform(delay_seconds * 0.75, delay_seconds * 1.5))
         if i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers (earnings)...", batch_pause, i)
             time.sleep(batch_pause)
@@ -486,7 +533,7 @@ def extract_analyst_recommendations(
         if i % 100 == 0:
             logger.info("Recommendations progress: %d/%d", i, total)
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(random.uniform(delay_seconds * 0.75, delay_seconds * 1.5))
         if i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers (recommendations)...", batch_pause, i)
             time.sleep(batch_pause)
@@ -542,7 +589,7 @@ def extract_analyst_price_targets(
         if i % 100 == 0:
             logger.info("Price targets progress: %d/%d", i, total)
         if i < total:
-            time.sleep(delay_seconds)
+            time.sleep(random.uniform(delay_seconds * 0.75, delay_seconds * 1.5))
         if i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers (price targets)...", batch_pause, i)
             time.sleep(batch_pause)
