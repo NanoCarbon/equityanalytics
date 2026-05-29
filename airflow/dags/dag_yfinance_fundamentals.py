@@ -97,7 +97,7 @@ def yfinance_fundamentals_weekly():
 @dag(
     dag_id='yfinance_valuation_daily',
     description='yfinance | Valuation ratios snapshot → Snowflake RAW | daily',
-    schedule='0 6 * * 2-6',    # 1am ET, Mon–Fri (6am UTC Tue–Sat) — 2h after prices
+    schedule='0 18 * * 2-6',   # noon ET, Mon–Fri (6pm UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
