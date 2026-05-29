@@ -60,7 +60,7 @@ def yfinance_fundamentals_weekly():
         logger.info("Loaded %d equity tickers", len(equity_tickers))
         return equity_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_statements(equity_tickers: list) -> int:
         """
         Extract income statement, balance sheet, and cash flow data
