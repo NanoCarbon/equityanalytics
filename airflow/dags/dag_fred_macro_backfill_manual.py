@@ -39,15 +39,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='macro_backfill',
-    description='FRED full history → Snowflake RAW.MACRO_INDICATORS (manual trigger)',
+    dag_id='fred_macro_backfill_manual',
+    description='FRED | Full macro history re-pull → Snowflake RAW | manual',
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['macro', 'backfill', 'manual'],
+    tags=['fred', 'macro', 'backfill', 'manual'],
 )
-def macro_backfill():
+def fred_macro_backfill_manual():
 
     @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
     def extract_and_load_full_history() -> int:
@@ -90,4 +90,4 @@ def macro_backfill():
     extract_and_load_full_history()
 
 
-macro_backfill()
+fred_macro_backfill_manual()

@@ -20,6 +20,7 @@ but loaded to a separate table with different grain (point-in-time snapshot vs S
 
 import logging
 import math
+import random
 import yfinance as yf
 import pandas as pd
 import time
@@ -94,6 +95,8 @@ def extract_financial_statements(
     delay_seconds: float = 2.0,
     batch_size: int = 100,
     batch_pause: float = 30.0,
+    long_cooldown_every: int = 500,
+    long_cooldown_seconds: float = 300.0,
 ) -> pd.DataFrame:
     """
     Extract income statement, balance sheet, and cash flow for all tickers.
@@ -105,6 +108,11 @@ def extract_financial_statements(
     tickers to avoid Yahoo Finance silently returning all-NaN DataFrames under
     sustained load. Without batch pauses, ~82% of tickers come back empty when
     running 1,500+ tickers with only a 2s per-ticker delay.
+
+    Rate-limiting strategy mirrors extract_valuation_metrics:
+      - Jitter on per-ticker sleep to reduce bot-signature patterns.
+      - Dynamic backoff already present (doubles on error, recovers on success).
+      - Long cooldown every 500 tickers to reset Yahoo's sliding window.
     """
     all_frames = []
     total = len(tickers)
@@ -145,9 +153,15 @@ def extract_financial_statements(
             delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
         if i < total:
-            time.sleep(delay)
+            time.sleep(random.uniform(delay * 0.75, delay * 1.5))
 
-        if i % batch_size == 0 and i < total:
+        if i % long_cooldown_every == 0 and i < total:
+            logger.info(
+                "Long cooldown %.0fs after %d tickers (resets Yahoo sliding window)...",
+                long_cooldown_seconds, i,
+            )
+            time.sleep(long_cooldown_seconds)
+        elif i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers (%d with data so far)...", batch_pause, i, tickers_with_data)
             time.sleep(batch_pause)
 
@@ -217,6 +231,8 @@ def extract_valuation_metrics(
     delay_seconds: float = 2.0,
     batch_size: int = 100,
     batch_pause: float = 30.0,
+    long_cooldown_every: int = 500,
+    long_cooldown_seconds: float = 300.0,
 ) -> pd.DataFrame:
     """
     Extract point-in-time valuation and ratio metrics from yfinance .info.
@@ -229,21 +245,47 @@ def extract_valuation_metrics(
     duplicate API hits. The data is loaded to a separate RAW table because
     the grain differs (valuation = daily time series vs company = SCD).
 
-    Rate-limited with per-ticker delay AND a longer batch pause every `batch_size`
-    tickers. equity_daily and valuation_daily both run at 11pm ET and both call
-    .info — without batch pauses Yahoo Finance silently throttles after ~270
-    tickers (same failure mode seen in financial statements extraction).
+    Rate-limiting strategy (Yahoo Finance .info endpoint):
+      - Per-ticker delay with ±50% jitter to avoid bot-signature patterns.
+      - Dynamic backoff on exceptions: delay doubles on error, recovers on success.
+      - Batch pause (default 30s) every 100 tickers.
+      - Long cooldown (default 5 min) every 500 tickers to reset Yahoo's sliding
+        rate-limit window. The long cooldown replaces (not adds to) the batch pause
+        at the 500-ticker mark to avoid stacking pauses.
+      - Explicit 429 / silent-throttle detection: Yahoo often returns a thin dict
+        (< 5 keys) instead of raising an exception when throttled. These are logged
+        and excluded from results rather than written as all-null rows.
     """
     records = []
     total = len(tickers)
     snapshot_date = datetime.utcnow().date()
     extracted_at = datetime.utcnow()
     skipped = []
+    empty_responses = 0
     delay = delay_seconds
 
     for i, ticker in enumerate(tickers, 1):
         try:
             info = yf.Ticker(ticker).info
+
+            # ── 429 / silent-throttle detection ──────────────────────────────
+            # A real yfinance .info response contains 50+ keys. A throttled or
+            # delisted response typically returns {} or a dict with only 1-4 keys
+            # (e.g. {"trailingPegRatio": null}). Writing all-null rows for these
+            # would silently corrupt the valuation time series.
+            if len(info) < 5:
+                empty_responses += 1
+                logger.warning(
+                    "Thin .info response for %s (%d keys) — possible 429 or "
+                    "delisted ticker. Skipping row. Total thin responses: %d",
+                    ticker, len(info), empty_responses,
+                )
+                skipped.append(ticker)
+                delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
+                if i < total:
+                    time.sleep(random.uniform(delay * 0.75, delay * 1.5))
+                continue
+
             row = {
                 "ticker": ticker,
                 "snapshot_date": snapshot_date,
@@ -283,15 +325,36 @@ def extract_valuation_metrics(
             })
             delay = min(_DELAY_MAX, delay * _BACKOFF_FACTOR)
 
+        # ── Per-ticker sleep with jitter ──────────────────────────────────────
+        # Jitter (±50% of current delay) makes the request pattern look less
+        # automated and reduces Yahoo's bot-detection confidence.
         if i < total:
-            time.sleep(delay)
+            time.sleep(random.uniform(delay * 0.75, delay * 1.5))
 
-        if i % batch_size == 0 and i < total:
+        # ── Batch / long-cooldown pauses ──────────────────────────────────────
+        # Long cooldown every `long_cooldown_every` tickers takes priority over
+        # the shorter batch pause — no need to stack both at the same index.
+        if i % long_cooldown_every == 0 and i < total:
+            logger.info(
+                "Long cooldown %.0fs after %d tickers (resets Yahoo sliding window)...",
+                long_cooldown_seconds, i,
+            )
+            time.sleep(long_cooldown_seconds)
+        elif i % batch_size == 0 and i < total:
             logger.info("Batch pause %ds after %d tickers...", batch_pause, i)
             time.sleep(batch_pause)
 
     if skipped:
-        logger.warning("Skipped %d tickers: %s%s", len(skipped), skipped[:10], '...' if len(skipped) > 10 else '')
+        logger.warning(
+            "Skipped %d tickers: %s%s",
+            len(skipped), skipped[:10], '...' if len(skipped) > 10 else '',
+        )
+    if empty_responses:
+        logger.warning(
+            "%d thin/empty .info responses detected — if this is high (>1%% of tickers) "
+            "consider increasing delay_seconds or long_cooldown_seconds.",
+            empty_responses,
+        )
 
     result = pd.DataFrame(records)
     logger.info("Extracted valuation metrics for %d tickers", len(result))

@@ -185,23 +185,27 @@ Adding new tickers always requires `dbt build --select fact_daily_prices --full-
 
 ## DAGs
 
-All scheduled DAGs run at 11pm ET (04:00 UTC). LocalExecutor — multiple DAGs run as concurrent subprocesses.
+Naming convention: `{source}_{content}_{frequency}`. LocalExecutor — concurrent subprocesses.
 
-| DAG | Schedule | File | Description |
+| DAG | Schedule (UTC) | File | Description |
 |---|---|---|---|
-| `ticker_universe_sync` | 3am ET Mon–Fri (`0 8 * * 2-6`) | dag_ticker_universe_sync.py | Three chained tasks: sync_sp_indices → sync_nasdaq_trader → sync_international_indices (Mon ET only) |
-| `equity_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_equity_daily.py | Prices (incremental) + company info (overwrite) |
-| `macro_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_macro_daily.py | FRED macro series (reads FRED_SELECTION at runtime, incremental) |
-| `valuation_daily` | 11pm ET Mon–Fri (`0 4 * * 2-6`) | dag_fundamentals.py | Valuation snapshot (daily append) |
-| `fundamentals_weekly` | 11pm ET Saturday (`0 4 * * 0`) | dag_fundamentals.py | Financial statements for ~7,293 equity tickers (full overwrite) |
-| `equity_supplemental_weekly` | 11pm ET Saturday (`0 4 * * 0`) | dag_equity_supplemental.py | Dividends, earnings, analyst data |
-| `fred_catalog_refresh` | 11pm ET 1st of month (`0 4 2 * *`) | dag_fred_catalog.py | FRED metadata catalog (monthly overwrite) |
-| `backfill_prices` | None (manual) | dag_backfill.py | Historical OHLCV back to 2010 |
-| `backfill_new_tickers` | None (manual) | dag_backfill_new_tickers.py | Backfill only tickers not yet in RAW.PRICES |
-| `macro_backfill` | None (manual, **paused**) | dag_macro_backfill.py | Full FRED history, all series — full overwrite (dangerous) |
-| `fred_new_series_backfill` | None (manual) | dag_fred_new_series_backfill.py | Full history for NEW series only — append-safe, idempotent |
+| `web_tickers_daily` | 8am Mon–Fri (`0 8 * * 2-6`) | dag_web_tickers_daily.py | sync_sp_indices → sync_nasdaq_trader → sync_international_indices (Mon ET only) |
+| `yfinance_prices_daily` | 4am Mon–Fri (`0 4 * * 2-6`) | dag_yfinance_prices_daily.py | Prices (incremental) |
+| `fred_macro_daily` | 4am Mon–Fri (`0 4 * * 2-6`) | dag_fred_macro_daily.py | FRED macro series (reads FRED_SELECTION at runtime, incremental) |
+| `yfinance_valuation_daily` | 6pm Mon–Fri (`0 18 * * 2-6`) | dag_yfinance_fundamentals.py | Valuation snapshot (daily append) — noon EDT |
+| `yfinance_fundamentals_weekly` | 4am Sunday (`0 4 * * 0`) | dag_yfinance_fundamentals.py | Financial statements for ~7,293 equity tickers (full overwrite) |
+| `yfinance_supplemental_weekly` | 4am Sunday (`0 4 * * 0`) | dag_yfinance_supplemental_weekly.py | Dividends → earnings → recommendations → price targets → company info (sequential, ~18h) |
+| `fred_catalog_monthly` | 4am 2nd of month (`0 4 2 * *`) | dag_fred_catalog_monthly.py | FRED metadata catalog (monthly overwrite) |
+| `yfinance_prices_backfill_manual` | None (manual) | dag_yfinance_prices_backfill_manual.py | Historical OHLCV back to 2010 |
+| `yfinance_new_tickers_backfill_manual` | None (manual) | dag_yfinance_new_tickers_backfill_manual.py | Backfill only tickers not yet in RAW.PRICES |
+| `fred_macro_backfill_manual` | None (manual, **paused**) | dag_fred_macro_backfill_manual.py | Full FRED history, all series — full overwrite (dangerous) |
+| `fred_new_series_backfill_manual` | None (manual) | dag_fred_new_series_backfill_manual.py | Full history for NEW series only — append-safe, idempotent |
 
-`ticker_universe_sync` runs 1 hour before `equity_daily` so DAGs always read a fresh ticker list.
+`web_tickers_daily` runs before `yfinance_prices_daily` so DAGs always read a fresh ticker list.
+
+`yfinance_valuation_daily` runs at noon EDT (not overnight) to avoid overlap with weekly runs and to keep it during waking hours.
+
+`yfinance_supplemental_weekly` tasks run **sequentially** (not in parallel) — Yahoo Finance rate-limits at the IP level and 5 parallel workers cause sustained 429 storms at 12K+ tickers.
 
 `sync_international_indices` checks `logical_date.weekday() == 1` (Tuesday UTC = Monday ET) — skips Tue–Fri since index membership only changes at quarterly rebalances.
 
@@ -310,14 +314,44 @@ Invoke-RestMethod "http://localhost:8080/api/v1/dags" -Headers $h | Select-Objec
 
 ## Known issues / next steps
 
+### Near-term
+
 1. **db_health_check.py thresholds** — `EXPECTED_TICKERS=1500` is stale; update to ~11,000 now that backfill is complete
-2. **equity_daily / valuation_daily scale** — 12,524 tickers at 2s/ticker (~7h) exceeds 2h task timeout; options: reduce delay, batch-parallel tasks, or incremental skip-already-updated logic
-3. **Phase 5 — Fundamentals cohort rotation** — update `fundamentals_weekly` to use `WEEKOFYEAR(CURRENT_DATE()) % 4` filter; change load to per-cohort scoped DELETE + INSERT; run `fact_fundamentals --full-refresh` after first 4-week cycle
-4. **GitHub branch protection** — add rule on `main`: require PRs, status checks, include administrators
-5. **chart_agent.py system prompt** — add supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) to Claude system prompt for SQL generation
-6. **dbt models for supplemental tables** — staging + mart models for all four supplemental RAW tables
-7. **Historical valuation ratios dbt model** — compute trailing PE/P/B/P/S/yield/beta from `fact_daily_prices` × `fact_fundamentals` join using point-in-time statement dates (avoids look-ahead bias)
-8. **FRED catalog retry hardening** — exponential backoff needed; current 15s single retry insufficient for sustained 429 bursts
+2. **Phase 5 — Fundamentals cohort rotation** — update `fundamentals_weekly` to use `WEEKOFYEAR(CURRENT_DATE()) % 4` filter; change load to per-cohort scoped DELETE + INSERT; run `fact_fundamentals --full-refresh` after first 4-week cycle. Reduces weekly runtime from ~5h to ~1.5h per run.
+3. **GitHub branch protection** — add rule on `main`: require PRs, status checks, include administrators
+4. **chart_agent.py system prompt** — add supplemental table schemas (DIVIDENDS_AND_SPLITS, EARNINGS_HISTORY, ANALYST_RECOMMENDATIONS, ANALYST_PRICE_TARGETS) to Claude system prompt for SQL generation
+5. **dbt models for supplemental tables** — staging + mart models for all four supplemental RAW tables
+6. **Historical valuation ratios dbt model** — compute trailing PE/P/B/P/S/yield/beta from `fact_daily_prices` × `fact_fundamentals` join using point-in-time statement dates (avoids look-ahead bias)
+7. **FRED catalog retry hardening** — exponential backoff needed; current 15s single retry insufficient for sustained 429 bursts
+8. **`assert_price_history_unchanged.sql` baselines** — all 15 expected_close values are `null::float`; populate from actual warehouse values to make the regression test functional
+
+### Phase 6 — Crypto
+
+Add cryptocurrency market data as a first-class asset class alongside equities.
+
+- **Data source:** CoinGecko API (free tier: 30 req/min, 10K req/month) or CoinMarketCap (paid). CoinGecko preferred — no API key required for basic OHLCV.
+- **Scope:** Top 200–500 coins by market cap. BTC, ETH, SOL, etc. Daily OHLCV + market cap + volume.
+- **RAW tables:** `CRYPTO_PRICES` (daily OHLCV, append), `CRYPTO_METADATA` (name, symbol, category, overwrite)
+- **DAG:** `coingecko_prices_daily` — `0 5 * * *` (daily, 5am UTC after equity prices). No rate-limit concerns at 500 coins vs 12K equity tickers.
+- **dbt:** `stg_crypto_prices` → `fact_crypto_prices`. Grain: coin × date. Reuse `dim_date`. New `dim_crypto` dimension.
+- **Ticker universe:** Crypto lives in a separate dimension table (`dim_crypto`) — do not mix into `RAW.TICKER_UNIVERSE` which is equity/ETF only.
+- **App integration:** New "Crypto" tab in Streamlit. Cross-asset correlation analysis (BTC vs SPY, risk-off signals). Claude SQL agent needs `dim_crypto` + `fact_crypto_prices` added to system prompt.
+- **Consideration:** 24/7 trading — no concept of "market closed". Daily close = UTC midnight snapshot. Some coins have extreme volatility; update `assert_return_bounds` thresholds or add a separate crypto-specific bounds test.
+
+### Phase 7 — Prediction Markets
+
+Ingest prediction market contract prices as a macro signal layer — market-implied probabilities for macro events (Fed rate decisions, election outcomes, recession probability, etc.).
+
+- **Data sources:**
+  - **Polymarket** — decentralised, REST API, no auth required. Real-money markets. Best for macro/political events.
+  - **Kalshi** — regulated US exchange, REST API (requires account). Cleaner data, official categories.
+  - **Metaculus** — free API, aggregated crowd forecasts (not real-money but high-volume and well-calibrated).
+- **Scope (Phase 7a):** Fed funds rate outcome markets, US recession probability, CPI/inflation surprise contracts, S&P 500 direction markets. ~20–50 active contracts at any time.
+- **RAW tables:** `PREDICTION_MARKET_PRICES` (contract × date × yes_price, append), `PREDICTION_MARKET_CONTRACTS` (metadata: question, category, resolution_date, overwrite)
+- **DAG:** `polymarket_signals_daily` — `0 6 * * *` (after equity prices and crypto). Lightweight — only 20–50 active contracts.
+- **dbt:** `stg_prediction_market_prices` → `fact_prediction_market_prices`. Grain: contract × date. `dim_prediction_contract` dimension.
+- **App integration:** "Macro Signals" section in Streamlit Overview tab. Show market-implied Fed rate path alongside FRED macro series. Cross-signal: does recession probability predict equity drawdowns?
+- **Consideration:** Contracts resolve and expire — need `is_resolved` flag and resolution value in `dim_prediction_contract`. Prices are 0–1 (probability); no need for the equity return bounds tests. Polymarket data can be sparse on weekends for some contracts.
 
 ---
 

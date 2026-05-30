@@ -1,16 +1,16 @@
 """
-DAGs: fundamentals_weekly + valuation_daily
-Replaces: fundamentals_pipeline() + valuation_pipeline() in pipeline_fundamentals.py
+DAGs: yfinance_fundamentals_weekly + yfinance_valuation_daily
+Source: yfinance  |  Two DAGs defined in one file.
 
-Two separate DAGs defined in one file:
+  yfinance_fundamentals_weekly  — runs every Saturday at 11pm ET (4am UTC Sunday)
+    - Extracts income statement, balance sheet, cash flow for all equity tickers
+    - EAV format; full overwrite to catch retroactive restatements
 
-  fundamentals_weekly  — runs every Saturday at 11pm ET
-    - Extracts income statement, balance sheet, cash flow for ~500 S&P 500 equities
-    - Full overwrite (catches retroactive restatements)
-
-  valuation_daily — runs Monday–Friday at 11pm ET
-    - Extracts PE, margins, EV/EBITDA, etc. for all ~616 tickers
-    - Appends a new snapshot row per ticker (builds a time series)
+  yfinance_valuation_daily — runs Monday–Friday at 1am ET (6am UTC Tue–Sat)
+    - Extracts PE, margins, EV/EBITDA, beta, dividend yield, etc. for all tickers
+    - Appends one snapshot row per ticker per day (builds a valuation time series)
+    - Staggered 2 hours after yfinance_prices_daily to avoid simultaneous
+      .info endpoint load from company_info in the supplemental DAG
 """
 
 import sys
@@ -33,15 +33,15 @@ DEFAULT_ARGS = {
 # ── DAG 1: Weekly financial statements ───────────────────────────
 
 @dag(
-    dag_id='fundamentals_weekly',
-    description='Financial statements for S&P 500 equities → Snowflake RAW (weekly)',
+    dag_id='yfinance_fundamentals_weekly',
+    description='yfinance | Financial statements (EAV) → Snowflake RAW | weekly',
     schedule='0 4 * * 0',      # 11pm ET Saturday (4am UTC Sunday)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['fundamentals', 'weekly'],
+    tags=['yfinance', 'fundamentals', 'weekly'],
 )
-def fundamentals_weekly():
+def yfinance_fundamentals_weekly():
 
     @task(execution_timeout=timedelta(hours=2))
     def get_equity_tickers() -> list:
@@ -60,7 +60,7 @@ def fundamentals_weekly():
         logger.info("Loaded %d equity tickers", len(equity_tickers))
         return equity_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_statements(equity_tickers: list) -> int:
         """
         Extract income statement, balance sheet, and cash flow data
@@ -95,15 +95,15 @@ def fundamentals_weekly():
 # ── DAG 2: Daily valuation snapshots ─────────────────────────────
 
 @dag(
-    dag_id='valuation_daily',
-    description='Valuation metrics snapshot for all tickers → Snowflake RAW (daily)',
-    schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
+    dag_id='yfinance_valuation_daily',
+    description='yfinance | Valuation ratios snapshot → Snowflake RAW | daily',
+    schedule='0 18 * * 2-6',   # noon ET, Mon–Fri (6pm UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['fundamentals', 'valuation', 'daily'],
+    tags=['yfinance', 'valuation', 'daily'],
 )
-def valuation_daily():
+def yfinance_valuation_daily():
 
     @task(execution_timeout=timedelta(hours=2))
     def get_all_tickers() -> list:
@@ -122,7 +122,7 @@ def valuation_daily():
         logger.info("Loaded %d tickers", len(all_tickers))
         return all_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_valuations(tickers: list) -> int:
         """
         Extract point-in-time valuation metrics (PE ratio, P/B, EV/EBITDA,
@@ -155,5 +155,5 @@ def valuation_daily():
 
 
 # Instantiate both DAGs
-fundamentals_weekly()
-valuation_daily()
+yfinance_fundamentals_weekly()
+yfinance_valuation_daily()

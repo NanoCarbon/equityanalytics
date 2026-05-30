@@ -1,15 +1,25 @@
 """
-DAG: equity_supplemental_weekly
-Schedule: Every Saturday at 11pm ET (04:00 UTC Sunday) — runs after fundamentals_weekly
+DAG: yfinance_supplemental_weekly
+Source: yfinance  |  Frequency: weekly (Saturday 11pm ET / 4am UTC Sunday)
 
-Loads four supplemental yfinance data types that don't need daily refreshes:
+Loads five supplemental yfinance data types that don't need daily refreshes:
 
   1. dividends_and_splits  — Full corporate action history (full overwrite)
   2. earnings_history      — EPS actuals vs. estimates, ~8-20Q per ticker (full overwrite)
   3. analyst_recs          — Upgrade/downgrade history from analyst firms (full overwrite)
-  4. analyst_targets       — Price target consensus snapshot, appended daily (append)
+  4. analyst_targets       — Price target consensus snapshot (append — builds time series)
+  5. company_info          — Sector, industry, market cap, etc. (full overwrite)
+                            Runs last — hits the .info endpoint (heaviest, 2s/ticker).
+                            Moved here from prices_daily — metadata changes slowly
+                            and daily execution caused simultaneous .info load with
+                            valuation_daily (429 risk at 12,500+ tickers).
 
-All four tasks run in parallel after the shared ticker list is resolved.
+SEQUENTIAL EXECUTION
+Tasks run one after another (not in parallel). Yahoo Finance rate-limits at the
+IP level — running all five tasks simultaneously from one host produced sustained
+429 storms that corrupted most of the fetched data. Sequential execution keeps the
+aggregate request rate safe at the cost of total runtime (~18-22 hrs at 12K tickers).
+This DAG starts Sunday at 4am UTC and finishes well before Tuesday's daily runs.
 
 First run acts as the backfill — yfinance returns full history for dividends,
 earnings, and recommendations, so no separate backfill DAG is needed.
@@ -36,15 +46,15 @@ RATE_DELAY = 0.5
 
 
 @dag(
-    dag_id='equity_supplemental_weekly',
-    description='Dividends, earnings history, analyst data → Snowflake RAW (weekly)',
+    dag_id='yfinance_supplemental_weekly',
+    description='yfinance | Company info, dividends, earnings, analyst data → Snowflake RAW | weekly',
     schedule='0 4 * * 0',      # 11pm ET Saturday (4am UTC Sunday)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['equity', 'fundamentals', 'weekly'],
+    tags=['yfinance', 'supplemental', 'weekly'],
 )
-def equity_supplemental_weekly():
+def yfinance_supplemental_weekly():
 
     @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
@@ -79,7 +89,29 @@ def equity_supplemental_weekly():
         logger.info("Loaded %d equity tickers", len(equity_tickers))
         return equity_tickers
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
+    def extract_and_load_company_info(tickers: list) -> int:
+        """
+        Extract company metadata (sector, industry, market cap, etc.) from
+        yfinance and overwrite RAW.COMPANY_INFO. Full overwrite — always
+        reflects the current snapshot.
+
+        Runs weekly rather than daily: metadata changes slowly and daily
+        execution was causing simultaneous .info calls alongside valuation_daily
+        (429 risk at 12,500+ tickers). Weekly cadence is sufficient.
+
+        Returns the number of rows loaded.
+        """
+        from ingestion.extract import extract_company_info
+        from ingestion.load import load_dataframe
+
+        logger.info("Fetching company metadata for %d tickers (2s delay between calls)", len(tickers))
+        df = extract_company_info(tickers, delay_seconds=2.0)
+        rows = load_dataframe(df, "COMPANY_INFO", overwrite=True)
+        logger.info("Overwrote RAW.COMPANY_INFO with %d rows", rows)
+        return rows
+
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_dividends(tickers: list) -> int:
         """
         Extract full dividend and stock split history for all tickers
@@ -103,7 +135,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.DIVIDENDS_AND_SPLITS with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_earnings(equity_tickers: list) -> int:
         """
         Extract EPS actuals vs. analyst estimates for equity tickers and
@@ -125,7 +157,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.EARNINGS_HISTORY with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_recommendations(equity_tickers: list) -> int:
         """
         Extract analyst upgrade/downgrade history and overwrite
@@ -148,7 +180,7 @@ def equity_supplemental_weekly():
         logger.info("Overwrote RAW.ANALYST_RECOMMENDATIONS with %d rows", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=5), execution_timeout=timedelta(hours=2))
+    @task(retries=2, retry_delay=timedelta(minutes=5))
     def extract_and_load_price_targets(equity_tickers: list) -> int:
         """
         Extract current analyst price target consensus (mean/high/low/count)
@@ -173,21 +205,32 @@ def equity_supplemental_weekly():
 
     # ── Wire up tasks ─────────────────────────────────────────────
     #
-    # get_tickers ────────────────────────────→ extract_and_load_dividends
+    # get_tickers and get_equity_tickers run in parallel (fast DB reads).
+    # All five extraction tasks then run SEQUENTIALLY to stay within Yahoo
+    # Finance's IP-level rate limit. Parallel execution from a single host
+    # causes sustained 429 storms that corrupt most of the fetched data.
     #
-    # get_equity_tickers ──┬──────────────────→ extract_and_load_earnings
-    #                      ├──────────────────→ extract_and_load_recommendations
-    #                      └──────────────────→ extract_and_load_price_targets
+    # Execution order (fastest → slowest, .info endpoint saved for last):
     #
-    # All four extraction tasks run in parallel.
+    # get_tickers ──────────────────────────────────────────────────────→ t_div ──→ t_info
+    #                                                                         ↑
+    # get_equity_tickers ──→ t_earn ──→ t_recs ──→ t_pt ──────────────────────┘
+    #
+    # Simplified linear chain enforced by >> :
+    # t_div >> t_earn >> t_recs >> t_pt >> t_info
 
     all_tickers    = get_tickers()
     equity_tickers = get_equity_tickers()
 
-    extract_and_load_dividends(all_tickers)
-    extract_and_load_earnings(equity_tickers)
-    extract_and_load_recommendations(equity_tickers)
-    extract_and_load_price_targets(equity_tickers)
+    t_div  = extract_and_load_dividends(all_tickers)
+    t_earn = extract_and_load_earnings(equity_tickers)
+    t_recs = extract_and_load_recommendations(equity_tickers)
+    t_pt   = extract_and_load_price_targets(equity_tickers)
+    t_info = extract_and_load_company_info(all_tickers)
+
+    # Force sequential execution — >> sets downstream dependency regardless
+    # of whether the tasks share input data.
+    t_div >> t_earn >> t_recs >> t_pt >> t_info
 
 
-equity_supplemental_weekly()
+yfinance_supplemental_weekly()

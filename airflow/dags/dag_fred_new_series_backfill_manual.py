@@ -38,15 +38,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='fred_new_series_backfill',
-    description='FRED full history → Snowflake RAW.MACRO_INDICATORS (new selections only, manual trigger)',
+    dag_id='fred_new_series_backfill_manual',
+    description='FRED | Full history for newly added series → Snowflake RAW | manual',
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['macro', 'backfill', 'manual', 'fred'],
+    tags=['fred', 'macro', 'backfill', 'manual'],
 )
-def fred_new_series_backfill():
+def fred_new_series_backfill_manual():
 
     @task(execution_timeout=timedelta(hours=2))
     def identify_new_series() -> list[dict]:
@@ -194,4 +194,4 @@ def fred_new_series_backfill():
     backfill_new_series(new)
 
 
-fred_new_series_backfill()
+fred_new_series_backfill_manual()

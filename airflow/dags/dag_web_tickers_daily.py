@@ -43,15 +43,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='ticker_universe_sync',
-    description='Sync RAW.TICKER_UNIVERSE from Wikipedia S&P 1500 + ETF list (nightly)',
-    schedule='0 8 * * 2-6',     # 3am ET Mon-Fri (8am UTC Tue-Sat)
+    dag_id='web_tickers_daily',
+    description='web | Ticker universe sync from Wikipedia + NASDAQ Trader → Snowflake RAW | daily',
+    schedule='0 8 * * 2-6',     # 3am ET Mon-Fri (8am UTC Tue-Sat) — runs before prices_daily
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['equity', 'universe', 'daily'],
+    tags=['web', 'tickers', 'daily'],
 )
-def ticker_universe_sync():
+def web_tickers_daily():
 
     @task(execution_timeout=timedelta(hours=2))
     def sync_sp_indices() -> dict:
@@ -348,7 +348,7 @@ def ticker_universe_sync():
             """ % (
                 ", ".join(
                     f"('{t.replace(chr(39),chr(39)*2)}', "
-                    f"'{nasdaq_by_ticker[t].get(\"exchange\",\"NASDAQ\").replace(chr(39),chr(39)*2)}')"
+                    f"'{nasdaq_by_ticker[t].get('exchange','NASDAQ').replace(chr(39),chr(39)*2)}')"
                     for t in nasdaq_set & existing_set
                     if existing[t][1] == 'nasdaq_trader'
                 ) or "('__NOOP__', '__NOOP__')"
@@ -395,7 +395,7 @@ def ticker_universe_sync():
             """ % (
                 ", ".join(
                     f"('{t.replace(chr(39),chr(39)*2)}', "
-                    f"'{nasdaq_by_ticker[t].get(\"exchange\",\"NASDAQ\").replace(chr(39),chr(39)*2)}')"
+                    f"'{nasdaq_by_ticker[t].get('exchange','NASDAQ').replace(chr(39),chr(39)*2)}')"
                     for t in nasdaq_set & existing_set
                     if existing[t][1] in {'sp500','sp400','sp600','etf'}
                 ) or "('__NOOP__', '__NOOP__')"
@@ -510,4 +510,4 @@ def ticker_universe_sync():
     sync_international_indices(nasdaq_result)   # Monday ET only; skips otherwise
 
 
-ticker_universe_sync()
+web_tickers_daily()
