@@ -40,3 +40,5 @@ profiles.yml
 # Airflow logs (generated at runtime)
 airflow/logs/**
 !airflow/logs/.gitkeep
+# Backfill wave ticker list files (generated, not source-controlled)
+scripts/backfill_wave*.txt
