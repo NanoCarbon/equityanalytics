@@ -1,3 +1,9 @@
+-- Grain: one row per (ticker, snapshot_date).
+-- RAW.VALUATION_METRICS is append-only (each daily run adds a new snapshot),
+-- but the DAG can run more than once on the same calendar date (manual triggers,
+-- retries). QUALIFY keeps only the most-recently extracted row per
+-- (ticker, snapshot_date), making the grain clean for downstream models and tests.
+
 with source as (
     select * from {{ source('raw', 'valuation_metrics') }}
 ),
@@ -62,6 +68,10 @@ cleaned as (
 
     from source
     where ticker is not null
+    qualify row_number() over (
+        partition by ticker, to_date(snapshot_date)
+        order by cast(extracted_at as timestamp_ntz) desc
+    ) = 1
 )
 
 select * from cleaned
