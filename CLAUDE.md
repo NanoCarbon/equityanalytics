@@ -45,7 +45,7 @@ A production-style ELT pipeline and AI-powered analytics application:
 
 ## Running things
 
-### dbt (run from repo root — `profiles.yml` lives here)
+### dbt (run from `dbt/` — `profiles.yml` lives there)
 
 dbt does NOT auto-read `.env`. Load env vars first:
 
@@ -62,13 +62,14 @@ set -a && source .env && set +a
 export SNOWFLAKE_PRIVATE_KEY_PATH="$(pwd)/snowflake_private_key.pem"
 ```
 
-Then run from `dbt_project/` or pass `--profiles-dir ..`:
+Then `cd dbt` and run — `profiles.yml` is in the same directory so no `--profiles-dir` flag needed:
 ```bash
-dbt debug --profiles-dir ..
-dbt build --profiles-dir ..
-dbt build --profiles-dir .. --select fact_daily_prices --full-refresh
-dbt build --profiles-dir .. --select fact_daily_prices fact_fundamentals fact_valuation_snapshot --full-refresh
-dbt test  --profiles-dir ..
+cd dbt
+dbt debug
+dbt build
+dbt build --select fact_daily_prices --full-refresh
+dbt build --select fact_daily_prices fact_fundamentals fact_valuation_snapshot --full-refresh
+dbt test
 ```
 
 **dbt is NOT installed inside Airflow Docker containers.** Always run locally.
@@ -228,8 +229,11 @@ Naming convention: `{source}_{content}_{frequency}`. LocalExecutor — concurren
 | `app/components/chat.py` | AI Analytics tab — Claude SQL generation + Plotly |
 | `app/db/snowflake.py` | `execute_sql_cached()`, `_load_private_key()` (supports file path and PEM string for Community Cloud) |
 | `agents/prompts.py` | `SYSTEM_PROMPT` (schema context for SQL generation), `FRED_CATEGORIES` |
-| `dbt_project/models/` | staging (13) / intermediate (2) / marts (6) dbt models |
-| `profiles.yml` | dbt connection profile (gitignored; reads env vars) |
+| `dbt/models/` | staging (13) / intermediate (2) / marts (6) dbt models |
+| `dbt/tests/` | singular SQL data tests |
+| `dbt/macros/` | dbt macros |
+| `dbt/dbt_project.yml` | dbt project config |
+| `dbt/profiles.yml` | dbt connection profile (gitignored; reads env vars) |
 | `docker-compose.yml` | Airflow Docker Compose (4 services: db, webserver, scheduler, init) |
 | `equity_analytics.bat` | App launcher for Windows |
 
@@ -253,7 +257,7 @@ VALUES ('SERIES_ID', 'Descriptive name', 'Category', TRUE);
 docker compose exec airflow-webserver airflow dags trigger fred_new_series_backfill
 
 # 4. Full-refresh the mart
-dbt build --profiles-dir .. --select fact_macro_readings --full-refresh
+cd dbt && dbt build --select fact_macro_readings --full-refresh
 ```
 
 ---
@@ -261,7 +265,7 @@ dbt build --profiles-dir .. --select fact_macro_readings --full-refresh
 ## Common pitfalls
 
 - **dbt without env vars** — will error `Env var required but not provided: 'SNOWFLAKE_ACCOUNT'`. Always load `.env` first.
-- **`SNOWFLAKE_PRIVATE_KEY_PATH` for dbt** — must be absolute path when running from `dbt_project/`. Use `export SNOWFLAKE_PRIVATE_KEY_PATH="$(pwd)/snowflake_private_key.pem"` from repo root before cd-ing in.
+- **`SNOWFLAKE_PRIVATE_KEY_PATH` for dbt** — must be absolute path when running from `dbt/`. Use `export SNOWFLAKE_PRIVATE_KEY_PATH="$(pwd)/snowflake_private_key.pem"` from repo root before cd-ing in.
 - **`macro_backfill` vs `fred_new_series_backfill`** — `macro_backfill` overwrites ALL series history. Always prefer `fred_new_series_backfill` for new series. `macro_backfill` is paused intentionally.
 - **`get_connection()` not `get_snowflake_connection()`** — the function in `ingestion/load.py` is `get_connection()`.
 - **dbt in Docker** — dbt is not installed in Airflow containers. Run locally.
