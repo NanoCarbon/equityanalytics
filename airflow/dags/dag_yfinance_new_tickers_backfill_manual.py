@@ -48,15 +48,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='backfill_new_tickers',
-    description='Backfill prices from 2010 for tickers not yet in RAW.PRICES (manual trigger)',
+    dag_id='yfinance_new_tickers_backfill_manual',
+    description='yfinance | Historical prices for new tickers not yet in RAW.PRICES | manual',
     schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['backfill', 'manual', 'prices'],
+    tags=['yfinance', 'prices', 'backfill', 'manual'],
 )
-def backfill_new_tickers():
+def yfinance_new_tickers_backfill_manual():
 
     @task(execution_timeout=timedelta(hours=2))
     def resolve_new_tickers() -> dict:
@@ -163,4 +163,4 @@ def backfill_new_tickers():
     run_backfill(ticker_info)
 
 
-backfill_new_tickers()
+yfinance_new_tickers_backfill_manual()

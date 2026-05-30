@@ -56,15 +56,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='fred_catalog_refresh',
-    description='Build FRED series metadata catalog → Snowflake RAW (monthly)',
+    dag_id='fred_catalog_monthly',
+    description='FRED | Series metadata catalog → Snowflake RAW | monthly',
     schedule='0 4 2 * *',          # 11pm ET on 1st of each month (4am UTC on 2nd)
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['macro', 'catalog', 'monthly'],
+    tags=['fred', 'catalog', 'monthly'],
 )
-def fred_catalog_refresh():
+def fred_catalog_monthly():
 
     @task(retries=1, retry_delay=timedelta(minutes=10), execution_timeout=timedelta(hours=2))
     def build_and_load_catalog() -> dict:
@@ -167,4 +167,4 @@ def fred_catalog_refresh():
     build_and_load_catalog()
 
 
-fred_catalog_refresh()
+fred_catalog_monthly()

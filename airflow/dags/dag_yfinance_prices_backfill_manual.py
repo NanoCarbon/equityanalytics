@@ -34,15 +34,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='backfill_prices',
-    description='One-time historical price backfill from 2010 (manual trigger only)',
-    schedule=None,              # Never runs automatically
+    dag_id='yfinance_prices_backfill_manual',
+    description='yfinance | Full historical price backfill from 2010 for all tickers | manual',
+    schedule=None,
     start_date=datetime(2026, 1, 1),
     catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['backfill', 'manual'],
+    tags=['yfinance', 'prices', 'backfill', 'manual'],
 )
-def backfill_prices():
+def yfinance_prices_backfill_manual():
 
     @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
@@ -154,4 +154,4 @@ def backfill_prices():
     run_backfill(tickers, boundaries)
 
 
-backfill_prices()
+yfinance_prices_backfill_manual()

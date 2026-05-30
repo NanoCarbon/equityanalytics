@@ -1,15 +1,15 @@
 """
-DAG: equity_daily
-Replaces: equity_pipeline() in ingestion/pipeline.py
+DAG: yfinance_prices_daily
+Source: yfinance  |  Frequency: daily (Mon–Fri ET, 4am UTC Tue–Sat)
 
-Schedule: Monday–Friday at 11pm ET (04:00 UTC next day)
 What it does:
-  1. Gets the full ticker list from RAW.TICKER_UNIVERSE (~1,600 tickers)
-  2. Finds the latest date already in Snowflake (incremental boundary)
-  3. Extracts new prices from yfinance + loads to RAW.PRICES
-  4. Extracts company metadata + loads to RAW.COMPANY_INFO (full overwrite)
+  1. Loads the full ticker list from RAW.TICKER_UNIVERSE
+  2. Finds the latest date already in RAW.PRICES (incremental boundary)
+  3. Bulk-downloads only the missing OHLCV data via yf.download and appends
+     to RAW.PRICES (5-day lookback overlap to catch late-arriving corrections)
 
-Tasks 3 and 4 are independent so they run in parallel.
+Company metadata (sector, market cap, etc.) is refreshed weekly by
+yfinance_supplemental_weekly — it doesn't need a daily overwrite.
 """
 
 import sys
@@ -33,15 +33,15 @@ DEFAULT_ARGS = {
 
 
 @dag(
-    dag_id='equity_daily',
-    description='Daily prices + company metadata → Snowflake RAW',
+    dag_id='yfinance_prices_daily',
+    description='yfinance | Incremental OHLCV prices → Snowflake RAW | daily',
     schedule='0 4 * * 2-6',    # 11pm ET, Mon–Fri (4am UTC Tue–Sat)
     start_date=datetime(2026, 1, 1),
-    catchup=False,              # don't backfill missed runs
+    catchup=False,
     default_args=DEFAULT_ARGS,
-    tags=['equity', 'daily'],
+    tags=['yfinance', 'prices', 'daily'],
 )
-def equity_daily():
+def yfinance_prices_daily():
 
     @task(execution_timeout=timedelta(hours=2))
     def get_tickers() -> list:
@@ -99,38 +99,12 @@ def equity_daily():
         logger.info("Appended %d rows to RAW.PRICES", rows)
         return rows
 
-    @task(retries=2, retry_delay=timedelta(minutes=2), execution_timeout=timedelta(hours=2))
-    def extract_and_load_company_info(tickers: list) -> int:
-        """
-        Extract company metadata (sector, market cap, etc.) and overwrite
-        RAW.COMPANY_INFO. Full overwrite because metadata changes over time
-        and we always want the current snapshot.
-
-        Returns the number of rows loaded.
-        """
-        from ingestion.extract import extract_company_info
-        from ingestion.load import load_dataframe
-
-        logger.info("Fetching metadata for %d tickers (2s delay between calls)", len(tickers))
-        df = extract_company_info(tickers, delay_seconds=2.0)
-        rows = load_dataframe(df, "COMPANY_INFO", overwrite=True)
-        logger.info("Overwrote RAW.COMPANY_INFO with %d rows", rows)
-        return rows
-
     # ── Wire up the task dependencies ────────────────────────────
-    #
-    # tickers ──┬──→ extract_and_load_prices (needs tickers + max_date)
-    #           │
-    # max_date ─┘
-    #
-    # tickers ──→ extract_and_load_company_info (independent, runs in parallel)
-
     tickers  = get_tickers()
     max_date = get_max_date()
 
     extract_and_load_prices(tickers, max_date)
-    extract_and_load_company_info(tickers)
 
 
 # Instantiate the DAG — Airflow discovers it by executing this module
-equity_daily()
+yfinance_prices_daily()
