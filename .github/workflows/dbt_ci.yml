@@ -4,13 +4,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'dbt_project/**'
-      - 'dbt_project.yml'
+      - 'dbt/**'
   push:
     branches: [main]
     paths:
-      - 'dbt_project/**'
-      - 'dbt_project.yml'
+      - 'dbt/**'
 
 jobs:
   dbt-run:
@@ -63,6 +61,7 @@ jobs:
 
       - name: Run dbt build
         run: |
+          cd dbt
           dbt deps --profiles-dir ~/.dbt
           dbt build --profiles-dir ~/.dbt
 
